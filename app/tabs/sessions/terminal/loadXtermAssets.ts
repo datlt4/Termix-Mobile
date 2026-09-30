@@ -5,6 +5,7 @@ type XtermAssets = {
   xtermJs: string;
   xtermCss: string;
   fitAddonJs: string;
+  canvasAddonJs: string;
   nerdFontBase64?: string;
 };
 
@@ -21,18 +22,20 @@ export async function loadXtermAssets(
   includeNerdFont: boolean,
 ): Promise<XtermAssets> {
   if (!cachedCore) {
-    const [xtermJsAsset, xtermCssAsset, fitAddonAsset] = await Asset.loadAsync([
+    const [xtermJsAsset, xtermCssAsset, fitAddonAsset, canvasAddonAsset] = await Asset.loadAsync([
       require("../../../../assets/xterm/xterm.js.html"),
       require("../../../../assets/xterm/xterm.css.html"),
       require("../../../../assets/xterm/xterm-addon-fit.js.html"),
+      require("../../../../assets/xterm/xterm-addon-canvas.js.html"),
     ]);
 
-    const [xtermJs, xtermCss, fitAddonJs] = await Promise.all([
+    const [xtermJs, xtermCss, fitAddonJs, canvasAddonJs] = await Promise.all([
       readAsset(xtermJsAsset),
       readAsset(xtermCssAsset),
       readAsset(fitAddonAsset),
+      readAsset(canvasAddonAsset),
     ]);
-    cachedCore = { xtermJs, xtermCss, fitAddonJs };
+    cachedCore = { xtermJs, xtermCss, fitAddonJs, canvasAddonJs };
   }
 
   if (includeNerdFont && !cachedNerdFontBase64) {

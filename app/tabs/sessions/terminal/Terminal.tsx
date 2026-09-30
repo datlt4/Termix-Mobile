@@ -190,6 +190,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       xtermJs: string;
       xtermCss: string;
       fitAddonJs: string;
+      canvasAddonJs: string;
       nerdFontBase64?: string;
     } | null>(null);
 
@@ -274,6 +275,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         xtermJs: string;
         xtermCss: string;
         fitAddonJs: string;
+        canvasAddonJs: string;
         nerdFontBase64?: string;
       }) => {
         const { width, height } = screenDimensions;
@@ -327,6 +329,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
   <style>${assets.xtermCss}</style>
   <script>${assets.xtermJs}</script>
   <script>${assets.fitAddonJs}</script>
+  <script>${assets.canvasAddonJs}</script>
   <style>
     ${nerdFontFace}
 
@@ -482,7 +485,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       convertEol: true,
       // The a11y DOM mirror is very expensive on mobile; only enable it
       // when the OS screen reader is actually active.
-      screenReaderMode: ${screenReaderEnabled || false},
+      screenReaderMode: ${isScreenReaderEnabled},
       windowsMode: false,
       macOptionIsMeta: false,
       macOptionClickForcesSelection: false,
@@ -496,6 +499,17 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
 
     const fitAddon = new FitAddon.FitAddon();
     terminal.loadAddon(fitAddon);
+
+    // Prefer the canvas renderer on mobile: the DOM renderer is much slower
+    // for scrolling and high-volume output. Fall back to DOM rendering if the
+    // canvas addon is unavailable or fails against this xterm build.
+    try {
+      if (window.CanvasAddon) {
+        terminal.loadAddon(new window.CanvasAddon.CanvasAddon());
+      }
+    } catch (e) {
+      console.warn('canvas renderer unavailable, using DOM renderer', e);
+    }
 
     terminal.open(document.getElementById('terminal'));
 
