@@ -1,0 +1,11 @@
+{
+  "name": "termix-mobile-nodejs-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Embedded Node.js SSH engine for Termix Mobile standalone mode (FORK)",
+  "main": "main.js",
+  "dependencies": {
+    "ssh2": "^1.16.0",
+    "ws": "^8.18.0"
+  }
+}

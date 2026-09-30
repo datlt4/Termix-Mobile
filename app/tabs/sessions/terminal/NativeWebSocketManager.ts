@@ -1,4 +1,6 @@
 import { getCurrentServerUrl, getCookie } from "../../../main-axios";
+import { isLocalModeEnabled } from "../../../local-ssh/localMode";
+import { ensureLocalSshServer } from "../../../local-ssh/localTerminal";
 
 export interface TerminalHostConfig {
   id: number;
@@ -108,6 +110,26 @@ export class NativeWebSocketManager {
 
     this.cols = cols;
     this.rows = rows;
+
+    // FORK: standalone mode — the SSH engine runs inside this app (embedded
+    // Node.js via nodejs-mobile) and speaks the same terminal protocol over
+    // loopback. No remote server, no JWT.
+    if (await isLocalModeEnabled()) {
+      let port: number;
+      try {
+        port = await ensureLocalSshServer();
+      } catch (e) {
+        this.config.onConnectionFailed(
+          "Local SSH engine failed to start: " +
+            (e instanceof Error ? e.message : String(e)),
+        );
+        return;
+      }
+      this.wsUrl = `ws://127.0.0.1:${port}/terminal`;
+      this.wsJwtProtocol = null;
+      this.connectWebSocket();
+      return;
+    }
 
     const serverUrl = getCurrentServerUrl();
     if (!serverUrl) {

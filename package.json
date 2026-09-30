@@ -1,9 +1,10 @@
 {
   "name": "termix-mobile",
   "main": "expo-router/entry",
-  "version": "1.5.0",
+  "version": "1.5.2-dev",
   "scripts": {
     "start": "expo start",
+    "postinstall": "node scripts/patch-nodejs-mobile-abi.js",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
@@ -51,6 +52,7 @@
     "guacamole-common-js": "^1.5.0",
     "lucide-react-native": "^0.544.0",
     "nativewind": "^4.2.1",
+    "nodejs-mobile-react-native": "^18.20.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-hook-form": "^7.62.0",

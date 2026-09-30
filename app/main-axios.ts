@@ -23,6 +23,14 @@ import type {
   SessionAuthOverrides,
 } from "../types/index";
 import {
+  isLocalModeEnabled,
+  getLocalHosts,
+  upsertLocalHost,
+  deleteLocalHost,
+  getLocalHostById,
+  type LocalHost,
+} from "./local-ssh/localMode";
+import {
   apiLogger,
   authLogger,
   sshLogger,
@@ -833,7 +841,80 @@ function normalizeSSHHostResponse(data: unknown): SSHHost[] | null {
   return hosts?.map(normalizeSSHHost) ?? null;
 }
 
+// ============================================================================
+// FORK: standalone (local) mode — host CRUD backed by AsyncStorage instead of
+// a remote server. See app/local-ssh/localMode.ts.
+// ============================================================================
+
+function localHostToSSHHost(h: LocalHost): SSHHost {
+  const authType: SSHHost["authType"] =
+    h.authType === "key" ? "key" : h.authType === "none" ? "none" : "password";
+  return {
+    id: h.id,
+    syncId: null,
+    connectionType: "ssh",
+    name: h.name,
+    ip: h.ip,
+    port: h.port,
+    username: h.username,
+    folder: h.folder || "",
+    tags: h.tags || [],
+    pin: Boolean(h.pin),
+    authType,
+    password: h.password ?? undefined,
+    key: h.key ?? undefined,
+    keyPassword: h.keyPassword ?? undefined,
+    keyType: h.keyType ?? undefined,
+    forceKeyboardInteractive: false,
+    enableTerminal: true,
+    enableTunnel: false,
+    enableFileManager: false,
+    defaultPath: h.defaultPath || "/",
+    tunnelConnections: [],
+    jumpHosts: [],
+    quickActions: [],
+    enableSsh: true,
+    createdAt: h.createdAt || new Date().toISOString(),
+    updatedAt: h.updatedAt || new Date().toISOString(),
+  };
+}
+
+function sshHostDataToLocalHost(
+  d: SSHHostData,
+  id?: number,
+): Omit<LocalHost, "id"> & { id?: number } {
+  const authType: LocalHost["authType"] =
+    d.authType === "key"
+      ? "key"
+      : d.authType === "none"
+        ? "none"
+        : "password";
+  return {
+    ...(id != null ? { id } : {}),
+    name: d.name || "",
+    ip: d.ip,
+    port: parseInt(d.port.toString()) || 22,
+    username: d.username,
+    authType,
+    password: authType === "password" ? d.password || null : null,
+    key:
+      authType === "key" && typeof d.key === "string" ? d.key : null,
+    keyPassword: authType === "key" ? d.keyPassword || null : null,
+    keyType: authType === "key" ? d.keyType || null : null,
+    folder: d.folder || "",
+    tags: d.tags || [],
+    pin: Boolean(d.pin),
+    defaultPath: d.defaultPath || "/",
+  };
+}
+
+
 export async function getSSHHosts(): Promise<SSHHost[]> {
+  // FORK: standalone mode — hosts live on this device.
+  if (await isLocalModeEnabled()) {
+    return (await getLocalHosts()).map(localHostToSSHHost);
+  }
+
   let lastError: unknown;
 
   for (const baseURL of getHostBaseCandidates(8081)) {
@@ -863,6 +944,17 @@ export async function getSSHHosts(): Promise<SSHHost[]> {
 }
 
 export async function createSSHHost(hostData: SSHHostData): Promise<SSHHost> {
+  // FORK: standalone mode — store on device.
+  if (await isLocalModeEnabled()) {
+    if (hostData.authType === "key" && !(typeof hostData.key === "string")) {
+      throw new Error(
+        "Standalone mode: paste the private key as text (file upload is not supported yet)",
+      );
+    }
+    const created = await upsertLocalHost(sshHostDataToLocalHost(hostData));
+    return localHostToSSHHost(created);
+  }
+
   try {
     const submitData = {
       name: hostData.name || "",
@@ -964,6 +1056,19 @@ export async function updateSSHHost(
   hostId: number,
   hostData: SSHHostData,
 ): Promise<SSHHost> {
+  // FORK: standalone mode — store on device.
+  if (await isLocalModeEnabled()) {
+    if (hostData.authType === "key" && !(typeof hostData.key === "string")) {
+      throw new Error(
+        "Standalone mode: paste the private key as text (file upload is not supported yet)",
+      );
+    }
+    const updated = await upsertLocalHost(
+      sshHostDataToLocalHost(hostData, hostId),
+    );
+    return localHostToSSHHost(updated);
+  }
+
   try {
     const submitData = {
       name: hostData.name || "",
@@ -1041,6 +1146,12 @@ export async function bulkImportSSHHosts(hosts: SSHHostData[]): Promise<{
 }
 
 export async function deleteSSHHost(hostId: number): Promise<any> {
+  // FORK: standalone mode — store on device.
+  if (await isLocalModeEnabled()) {
+    await deleteLocalHost(hostId);
+    return { success: true };
+  }
+
   try {
     const response = await sshHostApi.delete(`/db/host/${hostId}`);
     return response.data;
@@ -1050,6 +1161,13 @@ export async function deleteSSHHost(hostId: number): Promise<any> {
 }
 
 export async function getSSHHostById(hostId: number): Promise<SSHHost> {
+  // FORK: standalone mode — store on device.
+  if (await isLocalModeEnabled()) {
+    const host = await getLocalHostById(hostId);
+    if (!host) throw new Error("Host not found");
+    return localHostToSSHHost(host);
+  }
+
   try {
     const response = await sshHostApi.get(`/db/host/${hostId}`);
     return response.data;

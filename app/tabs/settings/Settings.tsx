@@ -65,8 +65,14 @@ export default function Settings() {
   const router = useRouter();
   const color = useThemeColor();
   const appVersion = Constants.expoConfig?.version ?? "";
-  const { isAuthenticated, setAuthenticated, openAuthFlow, authFlowVisible } =
-    useAppContext();
+  const {
+    isAuthenticated,
+    setAuthenticated,
+    openAuthFlow,
+    authFlowVisible,
+    localMode,
+    setLocalMode,
+  } = useAppContext();
   const { clearAllSessions } = useTerminalSessions();
   const { theme, setTheme, accent, setAccent } = useTheme();
   const appLock = useAppLock();
@@ -275,6 +281,18 @@ export default function Settings() {
           onToggle={() => toggle("server")}
         >
           <View className="gap-2.5 pt-3">
+            {/* FORK: standalone SSH — connections originate from this device,
+                hosts + credentials stay on the device. */}
+            <SettingRow
+              label="Standalone SSH (local mode)"
+              description="SSH directly from this device — hosts and passwords stay on the phone, no server account needed"
+              last={!serverUrl && !isAuthenticated}
+            >
+              <FakeSwitch
+                checked={localMode}
+                onChange={(v) => setLocalMode(v)}
+              />
+            </SettingRow>
             <View className="gap-1">
               <Label>Active Server</Label>
               <View className="flex-row items-center gap-2">

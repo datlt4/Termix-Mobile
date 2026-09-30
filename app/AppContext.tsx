@@ -18,6 +18,10 @@ import {
 } from "./main-axios";
 import Constants from "expo-constants";
 import { publishSignedOutSnapshot } from "@/app/widgets";
+import {
+  isLocalModeEnabled,
+  setLocalModeEnabled,
+} from "./local-ssh/localMode";
 
 interface Server {
   name: string;
@@ -61,6 +65,12 @@ interface AppContextType {
   /** Whether a server URL is currently configured (drives empty states). */
   hasServerConfigured: boolean;
   setHasServerConfigured: (has: boolean) => void;
+
+  /** FORK: standalone SSH mode — hosts + SSH live on this device, no server
+   *  account required. Drives the auth gates so local-only users can skip
+   *  the whole sign-in flow. */
+  localMode: boolean;
+  setLocalMode: (enabled: boolean) => void;
 
   /** Auth flow overlay control. */
   authFlowVisible: boolean;
@@ -108,6 +118,12 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [showUpdateScreen, setShowUpdateScreen] = useState<boolean>(false);
   const [hasServerConfigured, setHasServerConfigured] = useState(false);
+  const [localMode, setLocalModeState] = useState(false);
+
+  const setLocalMode = useCallback((enabled: boolean) => {
+    setLocalModeState(enabled);
+    void setLocalModeEnabled(enabled);
+  }, []);
 
   const [authFlowVisible, setAuthFlowVisible] = useState(false);
   const [authFlowInitialStep, setAuthFlowInitialStep] =
@@ -154,6 +170,17 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     const initializeApp = async () => {
       try {
         setIsLoading(true);
+
+        const localModeEnabled = await isLocalModeEnabled();
+        setLocalModeState(localModeEnabled);
+
+        // FORK: standalone mode needs no server and no account — the app is
+        // fully usable (host CRUD + SSH) on the device.
+        if (localModeEnabled) {
+          setHasServerConfigured(true);
+          setAuthenticated(true);
+          return;
+        }
 
         await initializeServerConfig();
 
@@ -241,6 +268,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
       if (
         nextAppState === "active" &&
         isAuthenticated &&
+        !localMode &&
         !validationInProgressRef.current
       ) {
         const now = Date.now();
@@ -277,15 +305,16 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     return () => {
       subscription.remove();
     };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, localMode]);
 
   // Keep hasServerConfigured in sync whenever the auth flow closes (the user
-  // may have just added or changed a server inside it).
+  // may have just added or changed a server inside it). Standalone mode is
+  // always "configured" by definition.
   useEffect(() => {
     if (!authFlowVisible) {
-      setHasServerConfigured(!!getCurrentServerUrl());
+      setHasServerConfigured(localMode || !!getCurrentServerUrl());
     }
-  }, [authFlowVisible]);
+  }, [authFlowVisible, localMode]);
 
   return (
     <AppContext.Provider
@@ -300,6 +329,8 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         setIsLoading,
         hasServerConfigured,
         setHasServerConfigured,
+        localMode,
+        setLocalMode,
         authFlowVisible,
         authFlowInitialStep,
         openAuthFlow,
