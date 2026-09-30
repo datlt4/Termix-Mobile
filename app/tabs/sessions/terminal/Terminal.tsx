@@ -480,7 +480,9 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       },
       allowTransparency: true,
       convertEol: true,
-      screenReaderMode: true,
+      // The a11y DOM mirror is very expensive on mobile; only enable it
+      // when the OS screen reader is actually active.
+      screenReaderMode: ${screenReaderEnabled || false},
       windowsMode: false,
       macOptionIsMeta: false,
       macOptionClickForcesSelection: false,
