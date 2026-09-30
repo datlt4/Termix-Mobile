@@ -418,6 +418,15 @@ export async function clearSession(): Promise<void> {
   await requestFreshWebSession();
 }
 
+/**
+ * Current Termix servers serve plugin routes under /plugin-api/<pluginId>
+ * (tunnels, file manager, host metrics). The legacy per-service bases
+ * (/ssh, /ssh/file_manager, root) only exist on older servers.
+ */
+function getPluginApiUrl(pluginId: string, defaultPort: number): string {
+  return getApiUrl(`/plugin-api/${pluginId}`, defaultPort);
+}
+
 function getApiUrl(path: string, defaultPort: number): string {
   if (configuredServerUrl) {
     const baseUrl = configuredServerUrl.replace(/\/$/, "");
@@ -473,14 +482,14 @@ function getHostBaseCandidates(defaultPort: number): string[] {
 function initializeApiInstances() {
   sshHostApi = createApiInstance(getHostBase(8081), "SSH_HOST");
 
-  tunnelApi = createApiInstance(getApiUrl("/ssh", 8083), "TUNNEL");
+  tunnelApi = createApiInstance(getPluginApiUrl("tunnels", 8083), "TUNNEL");
 
   fileManagerApi = createApiInstance(
-    getApiUrl("/ssh/file_manager", 8084),
+    getPluginApiUrl("file-manager", 8084),
     "FILE_MANAGER",
   );
 
-  statsApi = createApiInstance(getApiUrl("", 8085), "STATS");
+  statsApi = createApiInstance(getPluginApiUrl("host-metrics", 8085), "STATS");
 
   authApi = createApiInstance(getRootBase(8081), "AUTH");
 }
@@ -1127,7 +1136,7 @@ export async function getTunnelStatuses(): Promise<
   Record<string, TunnelStatus>
 > {
   try {
-    const response = await tunnelApi.get("/tunnel/status");
+    const response = await tunnelApi.get("/status");
     return response.data || {};
   } catch (error) {
     handleApiError(error, "fetch tunnel statuses");
@@ -1143,7 +1152,7 @@ export async function getTunnelStatusByName(
 
 export async function connectTunnel(tunnelConfig: TunnelConfig): Promise<any> {
   try {
-    const response = await tunnelApi.post("/tunnel/connect", tunnelConfig);
+    const response = await tunnelApi.post("/connect", tunnelConfig);
     return response.data;
   } catch (error) {
     handleApiError(error, "connect tunnel");
@@ -1152,7 +1161,7 @@ export async function connectTunnel(tunnelConfig: TunnelConfig): Promise<any> {
 
 export async function disconnectTunnel(tunnelName: string): Promise<any> {
   try {
-    const response = await tunnelApi.post("/tunnel/disconnect", { tunnelName });
+    const response = await tunnelApi.post("/disconnect", { tunnelName });
     return response.data;
   } catch (error) {
     handleApiError(error, "disconnect tunnel");
@@ -1161,7 +1170,7 @@ export async function disconnectTunnel(tunnelName: string): Promise<any> {
 
 export async function cancelTunnel(tunnelName: string): Promise<any> {
   try {
-    const response = await tunnelApi.post("/tunnel/cancel", { tunnelName });
+    const response = await tunnelApi.post("/cancel", { tunnelName });
     return response.data;
   } catch (error) {
     handleApiError(error, "cancel tunnel");

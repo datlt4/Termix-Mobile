@@ -84,6 +84,7 @@ export class NativeWebSocketManager {
   private cols = 80;
   private rows = 24;
   private wsUrl: string | null = null;
+  private wsJwtProtocol: string | null = null;
   private serverSessionId: string | null = null;
   private pendingReattach = false;
   private awaitingAuthCredentials = false;
@@ -127,7 +128,12 @@ export class NativeWebSocketManager {
     const wsProtocol = serverUrl.startsWith("https://") ? "wss://" : "ws://";
     const wsHost = serverUrl.replace(/^https?:\/\//, "");
     const cleanHost = wsHost.replace(/\/$/, "");
-    this.wsUrl = `${wsProtocol}${cleanHost}/ssh/websocket/?token=${encodeURIComponent(jwtToken)}`;
+    // Current Termix servers serve the terminal socket at
+    // /plugin-ws/ssh-terminal/terminal and authenticate the upgrade via the
+    // termix.jwt.<token> subprotocol. The legacy /ssh/websocket/?token=...
+    // endpoint no longer exists on current servers.
+    this.wsUrl = `${wsProtocol}${cleanHost}/plugin-ws/ssh-terminal/terminal`;
+    this.wsJwtProtocol = `termix.jwt.${jwtToken}`;
 
     this.connectWebSocket();
   }
@@ -355,7 +361,10 @@ export class NativeWebSocketManager {
       retryCount: this.reconnectAttempts,
     });
 
-    const ws = new WebSocket(this.wsUrl);
+    const ws = new WebSocket(
+      this.wsUrl,
+      this.wsJwtProtocol ? [this.wsJwtProtocol] : undefined,
+    );
     this.ws = ws;
 
     this.connectionTimeout = setTimeout(() => {
