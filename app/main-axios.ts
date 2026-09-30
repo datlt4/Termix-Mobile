@@ -912,10 +912,10 @@ function sshHostDataToLocalHost(
 // ============================================================================
 // FORK: host sync — a standalone device pulls the linked server's hosts (so
 // data survives a device wipe and the phone mirrors the desktop fleet) and
-// pushes newly-created hosts back. The server API never returns secrets, so
-// pulled hosts re-prompt for the password on the phone; credentials stored
-// locally are always kept. Deletes stay device-local on purpose
-// (accidental-delete safety).
+// pushes newly-created hosts back. The server returns the owner's secrets
+// in the host list (fork change), so pulled hosts bring their stored
+// password/key along; credentials already stored on the device always win.
+// Deletes stay device-local on purpose (accidental-delete safety).
 // ============================================================================
 
 function hostSyncKey(ip: string, port: number, username: string): string {
@@ -975,11 +975,32 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
     if (idx >= 0) {
       const existing = local[idx];
       const mergedName = sh.name || existing.name;
-      if (existing.name !== mergedName || existing.serverId !== serverId) {
+      // FORK: the server now returns the owner's secrets in the list —
+      // fill in credentials the device doesn't have yet. Locally stored
+      // values always win (a locally re-typed password is authoritative).
+      const serverPassword =
+        typeof sh.password === "string" ? sh.password : null;
+      const serverKey = typeof sh.key === "string" ? sh.key : null;
+      const nextPassword = existing.password || serverPassword;
+      const nextKey = existing.key || serverKey;
+      const nextKeyPassword = existing.keyPassword ?? sh.keyPassword ?? null;
+      const nextKeyType = existing.keyType ?? sh.keyType ?? null;
+      if (
+        existing.name !== mergedName ||
+        existing.serverId !== serverId ||
+        nextPassword !== (existing.password ?? null) ||
+        nextKey !== (existing.key ?? null) ||
+        nextKeyPassword !== (existing.keyPassword ?? null) ||
+        nextKeyType !== (existing.keyType ?? null)
+      ) {
         merged.push({
           ...existing,
           name: mergedName,
           serverId,
+          password: nextPassword ?? null,
+          key: nextKey ?? null,
+          keyPassword: nextKeyPassword,
+          keyType: nextKeyType,
           updatedAt: now,
         });
         changed = true;
@@ -994,7 +1015,16 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
         ip: sh.ip,
         port: Number(sh.port) || 22,
         username: sh.username || "",
-        authType: sh.authType === "none" ? "none" : "password",
+        authType:
+          sh.authType === "key"
+            ? "key"
+            : sh.authType === "none"
+              ? "none"
+              : "password",
+        password: typeof sh.password === "string" ? sh.password : null,
+        key: typeof sh.key === "string" ? sh.key : null,
+        keyPassword: sh.keyPassword ?? null,
+        keyType: sh.keyType ?? null,
         folder: sh.folder || "",
         tags: sh.tags || [],
         pin: Boolean(sh.pin),
