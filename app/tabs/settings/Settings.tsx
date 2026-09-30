@@ -16,6 +16,7 @@ import {
   Key,
   FileText,
   LayoutGrid,
+  Terminal as TerminalIcon,
 } from "lucide-react-native";
 import { useAppContext } from "@/app/AppContext";
 import { useTerminalSessions } from "@/app/contexts/TerminalSessionsContext";
@@ -511,6 +512,33 @@ export default function Settings() {
                 <Text className="text-[10px] text-muted-foreground">hex</Text>
               </View>
             </View>
+
+            {/* Terminal appearance (mirrors the desktop "Terminal Appearance") —
+                applied to every SSH terminal session. */}
+            <Pressable
+              onPress={() =>
+                router.push("/tabs/settings/TerminalCustomization" as any)
+              }
+              className="border-t border-border pt-3"
+            >
+              <View className="flex-row items-center justify-between">
+                <View className="flex-row items-center gap-2">
+                  <TerminalIcon
+                    size={15}
+                    color={color("muted-foreground")}
+                  />
+                  <View>
+                    <Text weight="medium" className="text-sm text-foreground">
+                      Terminal Appearance
+                    </Text>
+                    <Text className="mt-0.5 text-[11px] text-muted-foreground">
+                      Font, size, cursor, scrollback for SSH terminals
+                    </Text>
+                  </View>
+                </View>
+                <ChevronRight size={15} color={color("muted-foreground")} />
+              </View>
+            </Pressable>
           </View>
         </AccordionSection>
 
@@ -641,22 +669,6 @@ export default function Settings() {
           onToggle={() => toggle("customization")}
         >
           <View className="pt-2">
-            <Pressable
-              onPress={() =>
-                router.push("/tabs/settings/TerminalCustomization" as any)
-              }
-              className="flex-row items-center justify-between border-b border-border py-3"
-            >
-              <View>
-                <Text weight="medium" className="text-sm text-foreground">
-                  Terminal
-                </Text>
-                <Text className="mt-0.5 text-[11px] text-muted-foreground">
-                  Font, theme, cursor, scrollback
-                </Text>
-              </View>
-              <ChevronRight size={16} color={color("muted-foreground")} />
-            </Pressable>
             <Pressable
               onPress={() =>
                 router.push("/tabs/settings/KeyboardCustomization" as any)
