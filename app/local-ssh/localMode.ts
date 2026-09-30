@@ -30,13 +30,18 @@ export interface LocalHost {
 let cacheEnabled: boolean | null = null;
 
 /** True when standalone mode is on. Cached after the first read; mutate via
- *  setLocalModeEnabled so the in-memory state never lags the store. */
+ *  setLocalModeEnabled so the in-memory state never lags the store.
+ *
+ *  FORK: standalone (local SSH) is the DEFAULT mode — connections always
+ *  originate from this device. A never-touched device starts with it on;
+ *  the Settings toggle can still turn it off for legacy server relay. */
 export async function isLocalModeEnabled(): Promise<boolean> {
   if (cacheEnabled !== null) return cacheEnabled;
   try {
-    cacheEnabled = (await AsyncStorage.getItem(KEY_ENABLED)) === "1";
+    const raw = await AsyncStorage.getItem(KEY_ENABLED);
+    cacheEnabled = raw === null ? true : raw === "1";
   } catch (_) {
-    cacheEnabled = false;
+    cacheEnabled = true;
   }
   return cacheEnabled;
 }

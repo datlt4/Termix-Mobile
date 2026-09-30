@@ -1,7 +1,7 @@
 {
   "name": "termix-mobile",
   "main": "expo-router/entry",
-  "version": "1.5.2-dev",
+  "version": "2.9.3-dev",
   "scripts": {
     "start": "expo start",
     "postinstall": "node scripts/patch-nodejs-mobile-abi.js",
