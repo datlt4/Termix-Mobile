@@ -9,14 +9,7 @@ import { TERMINAL_FONTS } from "@/constants/terminal-themes";
 import { Text, Button, Input, Dialog } from "@/app/components/ui";
 import { useThemeColor } from "@/app/contexts/ThemeContext";
 
-const FONT_SIZE_OPTIONS = [
-  { label: "Extra Small", value: 12 },
-  { label: "Small", value: 14 },
-  { label: "Medium", value: 16 },
-  { label: "Large", value: 18 },
-  { label: "Extra Large", value: 20 },
-  { label: "Huge", value: 24 },
-];
+const FONT_SIZE_OPTIONS = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24];
 
 const LETTER_SPACING_OPTIONS = [
   { label: "Default", value: 0 },
@@ -49,9 +42,9 @@ export default function TerminalCustomization() {
   const [customFontSize, setCustomFontSize] = useState("");
   const [showCustomInput, setShowCustomInput] = useState(false);
 
-  const isCustomFontSize = !FONT_SIZE_OPTIONS.some(
-    (option) => option.value === config.fontSize,
-  );
+  const isCustomFontSize =
+    typeof config.fontSize === "number" &&
+    !FONT_SIZE_OPTIONS.includes(config.fontSize);
 
   const handleFontSizeChange = async (fontSize: number) => {
     try {
@@ -99,8 +92,8 @@ export default function TerminalCustomization() {
 
   const handleCustomFontSize = async () => {
     const fontSize = parseInt(customFontSize);
-    if (isNaN(fontSize) || fontSize <= 0) {
-      toast.error("Please enter a valid font size");
+    if (isNaN(fontSize) || fontSize < 5 || fontSize > 64) {
+      toast.error("Please enter a size between 5 and 64");
       return;
     }
     try {
@@ -203,28 +196,22 @@ export default function TerminalCustomization() {
           </View>
           <View className="gap-1.5 px-3 pb-3 pt-2">
             <Text className="mb-1 text-[11px] text-muted-foreground">
-              Base size for terminal text. Overrides the font size configured on
-              the host in Termix Web UI.
+              Terminal text size in pixels (px). Smaller = more text on screen.
             </Text>
             {FONT_SIZE_OPTIONS.map((option, i) => {
-              const isActive = config.fontSize === option.value;
+              const isActive = config.fontSize === option;
               return (
                 <Pressable
-                  key={option.value}
-                  onPress={() => handleFontSizeChange(option.value)}
+                  key={option}
+                  onPress={() => handleFontSizeChange(option)}
                   className={`flex-row items-center justify-between py-2.5 ${i < FONT_SIZE_OPTIONS.length - 1 || !isCustomFontSize ? "border-b border-border" : ""}`}
                 >
-                  <View>
-                    <Text
-                      weight="medium"
-                      className={`text-sm ${isActive ? "text-accent-brand" : "text-foreground"}`}
-                    >
-                      {option.label}
-                    </Text>
-                    <Text className="mt-0.5 text-[10px] text-muted-foreground">
-                      {option.value}px
-                    </Text>
-                  </View>
+                  <Text
+                    weight="medium"
+                    className={`text-sm ${isActive ? "text-accent-brand" : "text-foreground"}`}
+                  >
+                    {option}px
+                  </Text>
                   {isActive ? (
                     <View className="border border-accent-brand/40 bg-accent-brand/10 px-1.5 py-0.5">
                       <Text
@@ -385,7 +372,7 @@ export default function TerminalCustomization() {
         <Input
           value={customFontSize}
           onChangeText={setCustomFontSize}
-          placeholder="e.g. 15"
+          placeholder="e.g. 9"
           keyboardType="number-pad"
           autoFocus
         />
