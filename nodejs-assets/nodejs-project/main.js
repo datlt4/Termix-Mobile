@@ -64,6 +64,16 @@ function saveKnownHosts() {
   }
 }
 
+function hostKeyTypeName(blob) {
+  try {
+    const len = blob.readUInt32BE(0);
+    if (len > 0 && len < 64) return blob.toString("utf8", 4, 4 + len);
+  } catch (_) {
+    /* not a wire-format key */
+  }
+  return null;
+}
+
 function hostKeyFingerprint(buffer) {
   const b64 = crypto
     .createHash("sha256")
@@ -126,6 +136,7 @@ function makeSession(ws, hostConfig, cols, rows) {
     phase: "handshake", // handshake | awaiting-hostkey | awaiting-password | connected | closing
     pendingKeyAlgorithm: null,
     pendingKeyInfo: null,
+    hostKeyVerifierCb: null, // ssh2 hostVerifier callback (pending answer)
     kiState: null,
     authPrompted: false,
     userTried: false,
@@ -165,43 +176,13 @@ function openSSH(s) {
 
   log(s, "info", `Connecting to ${h.ip}:${h.port} as ${h.username}…`);
 
-  conn.on("serverhostkey", (err, verificationKey, _bitmap, algorithm) => {
-    if (err) return failSession(s, "Host key verification error: " + err.message);
-    if (s.phase !== "handshake") return;
-    const fp = hostKeyFingerprint(verificationKey);
-    const keyId = h.ip + ":" + h.port;
-    const known = knownHosts[keyId];
-    if (known && known.fingerprint === fp) {
-      try {
-        conn.acceptServerHostKey(algorithm);
-      } catch (e) {
-        failSession(s, "Failed to accept host key: " + e.message);
-      }
-      return;
-    }
-    s.phase = "awaiting-hostkey";
-    s.pendingKeyAlgorithm = algorithm;
-    s.pendingKeyInfo = {
-      ip: h.ip,
-      port: h.port,
-      fingerprint: fp,
-      keyType: algorithm,
-      algorithm,
-      oldFingerprint: known ? known.fingerprint : undefined,
-      oldKeyType: known ? known.keyType : undefined,
-    };
-    send(s.ws, {
-      type: known ? "host_key_changed" : "host_key_verification_required",
-      data: s.pendingKeyInfo,
-    });
-  });
-
   conn.on("ready", () => {
     startShell(s);
   });
 
   conn.on("error", (err) => {
     if (s.done || s.phase === "closing") return;
+    if (s.conn !== conn) return; // FORK: stale connection (already reconnected)
     if (s.phase === "awaiting-hostkey") return;
 
     if (isAuthError(err && err.message)) {
@@ -228,6 +209,23 @@ function openSSH(s) {
 
   conn.on("close", () => {
     if (s.done) return;
+    if (s.conn !== conn) return; // FORK: stale connection (already reconnected)
+    // FORK: the server dropped the connection while a credential / host-key
+    // dialog is still open (e.g. OpenSSH closing right after a rejected
+    // "none" auth). Keep the WS + session alive so the dialog can still be
+    // answered; answering triggers a fresh connection.
+    if (s.phase === "awaiting-password" || s.phase === "awaiting-hostkey") {
+      s.conn = null;
+      s.shell = null;
+      if (s.phase === "awaiting-password") {
+        try {
+          send(s.ws, { type: "password_required", prompt: "Password: " });
+        } catch (_) {
+          /* socket gone */
+        }
+      }
+      return;
+    }
     s.phase = "closing";
     try {
       send(s.ws, { type: "data", data: "\r\n[connection closed]\r\n" });
@@ -263,6 +261,49 @@ function openSSH(s) {
     keepaliveInterval: 15000,
     keepaliveCountMax: 4,
     readyTimeout: READY_TIMEOUT_MS,
+    // FORK: ssh2 1.x has no "serverhostkey" event — host key verification
+    // is done through hostVerifier (without it ssh2 accepts any host key).
+    // Known fingerprints are accepted silently (TOFU): unknown or changed
+    // keys prompt the RN host-key dialog and wait for the user's answer.
+    hostVerifier: (key, verify) => {
+      if (s.done) {
+        try {
+          verify(false);
+        } catch (_) {
+          /* noop */
+        }
+        return;
+      }
+      const fp = hostKeyFingerprint(key);
+      const keyId = h.ip + ":" + h.port;
+      const known = knownHosts[keyId];
+      if (known && known.fingerprint === fp) {
+        verify(true);
+        return;
+      }
+      s.phase = "awaiting-hostkey";
+      s.hostKeyVerifierCb = verify;
+      const keyType = hostKeyTypeName(key);
+      s.pendingKeyInfo = {
+        ip: h.ip,
+        port: h.port,
+        fingerprint: fp,
+        keyType: keyType || "unknown",
+        algorithm: keyType || "unknown",
+        oldFingerprint: known ? known.fingerprint : undefined,
+        oldKeyType: known ? known.keyType : undefined,
+      };
+      try {
+        send(s.ws, {
+          type: known
+            ? "host_key_changed"
+            : "host_key_verification_required",
+          data: s.pendingKeyInfo,
+        });
+      } catch (_) {
+        /* socket gone */
+      }
+    },
     // Providing both lets ssh2 try each method the server advertises.
     ...(h.password ? { password: h.password } : {}),
     ...(h.privateKey
@@ -303,9 +344,21 @@ function startShell(s) {
 
 function tryAuthWithCredential(s, code) {
   const conn = s.conn;
-  if (!conn || s.done) return;
+  if (s.done) return;
   s.phase = "awaiting-password";
   s.userTried = true;
+
+  // FORK: the connection dropped while the credential dialog was open
+  // (common when the server closes right after a rejected "none" auth).
+  // Start a fresh connection: plain-password hosts retry with the typed
+  // code; keyboard-interactive (TOTP) hosts get re-prompted by the server.
+  if (!conn) {
+    const wasKeyboardInteractive = Boolean(s.kiState);
+    s.kiState = null;
+    if (!wasKeyboardInteractive && code) s.host.password = code;
+    openSSH(s);
+    return;
+  }
 
   if (s.kiState) {
     // Respond to the keyboard-interactive prompt the server opened.
@@ -322,13 +375,22 @@ function tryAuthWithCredential(s, code) {
     conn.auth(s.host.username, code);
     // Success is signalled via 'ready'; failure via 'error'.
   } catch (e) {
-    s.userTried = false;
-    promptPassword(s);
+    // FORK: the socket is already gone (e.g. the server closed right after
+    // the rejected "none" auth) — reconnect with the typed password instead
+    // of re-prompting against a dead socket (would loop forever).
+    if (code) s.host.password = code;
+    s.conn = null;
+    openSSH(s);
+    // openSSH() resets userTried — re-flag it: this attempt carries a
+    // user-typed code, so a rejection must re-prompt (retry), not fail.
+    s.userTried = true;
   }
 }
 
 function handleHostKeyResponse(s, action) {
   if (s.phase !== "awaiting-hostkey") return;
+  const verifyCb = s.hostKeyVerifierCb;
+  s.hostKeyVerifierCb = null;
   if (action === "accept") {
     const keyId = s.host.ip + ":" + s.host.port;
     knownHosts[keyId] = {
@@ -338,14 +400,24 @@ function handleHostKeyResponse(s, action) {
     };
     saveKnownHosts();
     s.phase = "handshake";
-    try {
-      s.conn.acceptServerHostKey(s.pendingKeyAlgorithm);
-    } catch (e) {
-      failSession(s, "Failed to accept host key: " + e.message);
+    if (s.conn) {
+      if (typeof verifyCb === "function") verifyCb(true);
+      return;
     }
-  } else {
-    failSession(s, "Host key rejected by user");
+    // FORK: the connection died while the dialog was open (e.g. ready
+    // timeout) — reconnect; the just-stored fingerprint is auto-accepted
+    // on the new handshake.
+    openSSH(s);
+    return;
   }
+  if (typeof verifyCb === "function") {
+    try {
+      verifyCb(false);
+    } catch (_) {
+      /* conn already gone */
+    }
+  }
+  failSession(s, "Host key rejected by user");
 }
 
 // ---------------------------------------------------------------------------
