@@ -25,6 +25,7 @@ import type {
 import {
   isLocalModeEnabled,
   getLocalHosts,
+  saveLocalHosts,
   upsertLocalHost,
   deleteLocalHost,
   getLocalHostById,
@@ -908,11 +909,178 @@ function sshHostDataToLocalHost(
   };
 }
 
+// ============================================================================
+// FORK: host sync — a standalone device pulls the linked server's hosts (so
+// data survives a device wipe and the phone mirrors the desktop fleet) and
+// pushes newly-created hosts back. The server API never returns secrets, so
+// pulled hosts re-prompt for the password on the phone; credentials stored
+// locally are always kept. Deletes stay device-local on purpose
+// (accidental-delete safety).
+// ============================================================================
+
+function hostSyncKey(ip: string, port: number, username: string): string {
+  return `${ip}:${port}:${username}`;
+}
+
+/** Best-effort fetch of the linked server's host list. Returns null when not
+ *  linked, not logged in, or unreachable — never throws. */
+async function fetchServerHostsQuiet(): Promise<SSHHost[] | null> {
+  if (!getCurrentServerUrl()) return null;
+  const token = await getCookie("jwt");
+  if (!token || token.trim() === "") return null;
+
+  const attempts = getHostBaseCandidates(8081).map((baseURL) =>
+    axios
+      .create({
+        baseURL,
+        timeout: 4000,
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .get("/db/host", { headers: { "Cache-Control": "no-cache" } })
+      .then((response) => {
+        const hosts = normalizeSSHHostResponse(response.data);
+        if (!hosts) throw new Error("unexpected response shape");
+        return hosts;
+      }),
+  );
+  const settled = await Promise.allSettled(attempts);
+  for (const result of settled) {
+    if (result.status === "fulfilled") return result.value;
+  }
+  return null;
+}
+
+/** Merge the linked server's hosts into the local device list (persisted).
+ *  Server wins for name/identity; the device keeps its ids, serverId and any
+ *  locally stored credentials. Device-only hosts are preserved. */
+async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
+  const local = await getLocalHosts();
+  const serverHosts = await fetchServerHostsQuiet();
+  if (!serverHosts || serverHosts.length === 0) return local;
+
+  const now = new Date().toISOString();
+  let nextId = local.reduce((max, h) => Math.max(max, h.id || 0), 0);
+  const merged: LocalHost[] = [];
+  const serverKeys = new Set<string>();
+  let changed = false;
+
+  for (const sh of serverHosts) {
+    if (sh.connectionType && sh.connectionType !== "ssh") continue;
+    const key = hostSyncKey(sh.ip, Number(sh.port) || 22, sh.username || "");
+    serverKeys.add(key);
+    const serverId = Number.isFinite(sh.id) ? sh.id : undefined;
+    const idx = local.findIndex(
+      (lh) => hostSyncKey(lh.ip, lh.port, lh.username) === key,
+    );
+    if (idx >= 0) {
+      const existing = local[idx];
+      const mergedName = sh.name || existing.name;
+      if (existing.name !== mergedName || existing.serverId !== serverId) {
+        merged.push({
+          ...existing,
+          name: mergedName,
+          serverId,
+          updatedAt: now,
+        });
+        changed = true;
+      } else {
+        merged.push(existing);
+      }
+    } else {
+      nextId += 1;
+      merged.push({
+        id: nextId,
+        name: sh.name || `${sh.username}@${sh.ip}`,
+        ip: sh.ip,
+        port: Number(sh.port) || 22,
+        username: sh.username || "",
+        authType: sh.authType === "none" ? "none" : "password",
+        folder: sh.folder || "",
+        tags: sh.tags || [],
+        pin: Boolean(sh.pin),
+        serverId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      changed = true;
+    }
+  }
+
+  for (const lh of local) {
+    if (!serverKeys.has(hostSyncKey(lh.ip, lh.port, lh.username))) {
+      merged.push(lh);
+    }
+  }
+
+  if (changed) await saveLocalHosts(merged);
+  return merged;
+}
+
+/** Best-effort push of a device-created host to the linked server so it is
+ *  recoverable and visible from other devices. Never throws. */
+async function pushLocalHostToServer(host: LocalHost): Promise<void> {
+  if (!getCurrentServerUrl()) return;
+  if (host.serverId != null) return; // already synced
+  const token = await getCookie("jwt");
+  if (!token || token.trim() === "") return;
+
+  const payload = {
+    name: host.name,
+    ip: host.ip,
+    port: host.port,
+    username: host.username,
+    folder: host.folder || "",
+    tags: host.tags || [],
+    pin: Boolean(host.pin),
+    authType:
+      host.authType === "key"
+        ? "key"
+        : host.authType === "none"
+          ? "none"
+          : "password",
+    password: host.authType === "password" ? host.password || null : null,
+    key: host.authType === "key" ? host.key || null : null,
+    keyPassword: host.authType === "key" ? host.keyPassword || null : null,
+    keyType: host.authType === "key" ? host.keyType || null : null,
+    enableSsh: true,
+    enableTerminal: true,
+    enableTunnel: false,
+    enableFileManager: false,
+    defaultPath: "",
+    jumpHosts: [],
+  };
+
+  const attempts = getHostBaseCandidates(8081).map((baseURL) =>
+    axios
+      .create({
+        baseURL,
+        timeout: 6000,
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .post("/db/host", payload),
+  );
+  const settled = await Promise.allSettled(attempts);
+  const done = settled.find((result) => result.status === "fulfilled");
+  if (!done || done.status !== "fulfilled") return;
+  const body = (done.value as { data: unknown }).data as
+    | { id?: unknown; host?: { id?: unknown } }
+    | null;
+  const serverId = Number(body?.id ?? body?.host?.id);
+  if (!Number.isFinite(serverId) || serverId <= 0) return;
+  const hosts = await getLocalHosts();
+  const idx = hosts.findIndex((h) => h.id === host.id);
+  if (idx >= 0) {
+    hosts[idx] = { ...hosts[idx], serverId };
+    await saveLocalHosts(hosts);
+  }
+}
 
 export async function getSSHHosts(): Promise<SSHHost[]> {
-  // FORK: standalone mode — hosts live on this device.
+  // FORK: standalone mode — hosts live on this device, merged with the
+  // linked server's fleet (non-fatal when the server is unreachable).
   if (await isLocalModeEnabled()) {
-    return (await getLocalHosts()).map(localHostToSSHHost);
+    const hosts = await syncLocalHostsFromServer();
+    return hosts.map(localHostToSSHHost);
   }
 
   let lastError: unknown;
@@ -951,7 +1119,23 @@ export async function createSSHHost(hostData: SSHHostData): Promise<SSHHost> {
         "Standalone mode: paste the private key as text (file upload is not supported yet)",
       );
     }
-    const created = await upsertLocalHost(sshHostDataToLocalHost(hostData));
+    const localHosts = await getLocalHosts();
+    const incomingKey = hostSyncKey(
+      hostData.ip,
+      parseInt(hostData.port.toString()) || 22,
+      hostData.username,
+    );
+    // FORK: re-adding a known host updates the existing record (keeping its
+    // serverId) instead of creating a duplicate.
+    const existing = localHosts.find(
+      (h) => hostSyncKey(h.ip, h.port, h.username) === incomingKey,
+    );
+    const created = await upsertLocalHost(
+      sshHostDataToLocalHost(hostData, existing?.id),
+    );
+    // FORK: best-effort push so a brand-new host is recoverable + visible on
+    // other devices. Never blocks or fails the local save above.
+    void pushLocalHostToServer(created);
     return localHostToSSHHost(created);
   }
 

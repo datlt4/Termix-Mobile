@@ -23,6 +23,8 @@ export interface LocalHost {
   tags?: string[];
   pin?: boolean;
   defaultPath?: string;
+  /** Id of the matching host on the linked sync server (when pushed/merged). */
+  serverId?: number;
   createdAt?: string;
   updatedAt?: string;
 }
