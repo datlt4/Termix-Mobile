@@ -21,6 +21,7 @@ import {
   logActivity,
   getSnippets,
   saveCommandToHistory,
+  rememberLocalHostPassword,
 } from "../../../main-axios";
 import { showToast } from "../../../utils/toast";
 import { useTerminalCustomization } from "../../../contexts/TerminalCustomizationContext";
@@ -103,6 +104,12 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
   ) => {
     const webViewRef = useRef<WebView>(null);
     const wsManagerRef = useRef<NativeWebSocketManager | null>(null);
+    // FORK: standalone mode — a password typed into the auth dialog, kept
+    // until the session actually connects, then stored on the local host.
+    const lastTypedPasswordRef = useRef<{
+      hostId: number;
+      code: string;
+    } | null>(null);
     const terminalColsRef = useRef(80);
     const terminalRowsRef = useRef(24);
     // Pixel height of the visible terminal area as measured by RN layout.
@@ -992,13 +999,23 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
 
     const handleTotpSubmit = useCallback(
       (code: string) => {
-        wsManagerRef.current?.sendTotpResponse(code, isPasswordPrompt);
+        const wasPassword = isPasswordPrompt;
+        wsManagerRef.current?.sendTotpResponse(code, wasPassword);
+        // FORK: standalone mode — remember the typed password; it is saved
+        // on the local host only once the session actually connects (the
+        // "connected" state handler), so wrong passwords are never stored.
+        if (wasPassword && code) {
+          lastTypedPasswordRef.current = {
+            hostId: Number(hostConfig.id),
+            code,
+          };
+        }
         setTotpRequired(false);
         setTotpPrompt("");
         setIsPasswordPrompt(false);
         setConnectionState("connecting");
       },
-      [isPasswordPrompt],
+      [isPasswordPrompt, hostConfig.id],
     );
 
     const handleAuthDialogSubmit = useCallback(
@@ -1118,6 +1135,20 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
               const isReattach = data?.isReattach as boolean;
               setConnectionState("connected");
               setRetryCount(0);
+              // FORK: standalone mode — the just-typed password actually
+              // worked: store it on the local host (next session won't
+              // re-prompt) and on the live config (in-tab reconnects).
+              const pendingPassword = lastTypedPasswordRef.current;
+              if (pendingPassword && pendingPassword.hostId > 0) {
+                lastTypedPasswordRef.current = null;
+                rememberLocalHostPassword(
+                  pendingPassword.hostId,
+                  pendingPassword.code,
+                ).catch(() => {});
+                wsManagerRef.current?.updateHostCredentials({
+                  password: pendingPassword.code,
+                });
+              }
               if (!isReattach) {
                 setHasReceivedData(false);
               }

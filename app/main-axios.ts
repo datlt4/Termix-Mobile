@@ -1075,6 +1075,33 @@ async function pushLocalHostToServer(host: LocalHost): Promise<void> {
   }
 }
 
+/** FORK: standalone mode — store a password that just authenticated
+ *  successfully on the local host record, so future sessions don't
+ *  re-prompt. Best-effort; only applies in local mode. */
+export async function rememberLocalHostPassword(
+  hostId: number,
+  password: string,
+): Promise<void> {
+  if (!(await isLocalModeEnabled())) return;
+  try {
+    const hosts = await getLocalHosts();
+    const idx = hosts.findIndex((h) => h.id === hostId);
+    if (idx < 0) return;
+    hosts[idx] = {
+      ...hosts[idx],
+      authType: "password",
+      password,
+      key: null,
+      keyPassword: null,
+      keyType: null,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveLocalHosts(hosts);
+  } catch (_) {
+    /* storage failure is non-fatal */
+  }
+}
+
 export async function getSSHHosts(): Promise<SSHHost[]> {
   // FORK: standalone mode — hosts live on this device, merged with the
   // linked server's fleet (non-fatal when the server is unreachable).

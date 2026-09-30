@@ -215,6 +215,22 @@ export class NativeWebSocketManager {
     }
   }
 
+  /** FORK: standalone mode — store successfully-authenticated credentials on
+   *  the live host config so background reconnects in this tab reuse them. */
+  updateHostCredentials(
+    credentials: { password?: string; sshKey?: string; keyPassword?: string },
+  ): void {
+    this.config.hostConfig = {
+      ...this.config.hostConfig,
+      password: credentials.password,
+      key: credentials.sshKey,
+      keyPassword: credentials.keyPassword,
+      authType: (credentials.password ? "password" : "key") as
+        | "password"
+        | "key",
+    };
+  }
+
   sendHostKeyResponse(action: "accept" | "reject"): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
