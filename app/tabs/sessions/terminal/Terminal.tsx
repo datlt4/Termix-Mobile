@@ -853,15 +853,42 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       setTimeout(handleResize, 100);
     });
 
-    // Touch-scroll for both the normal scrollback and TUI alternate-screen
-    // buffers. Instead of calling terminal.scrollLines() (which is a no-op on
-    // the alt buffer that Claude Code / Codex run in), synthesize a wheel
-    // event on the xterm root element: xterm then routes it either to the
-    // scrollback (normal buffer) or to SGR mouse / arrow-key sequences the TUI
-    // understands (alternate buffer with/without mouse tracking).
-    // touchmove is non-passive so we can preventDefault and stop the native
-    // WebView/page from hijacking the swipe (especially up-swipe when the
-    // alt buffer is already at its top).
+    // Wheel normalizer: mouse / trackpad wheels (USB / Bluetooth on Android,
+    // some desktop browsers) report LINE-mode deltas — 1 notch = exactly 1
+    // line, which is what made scrolling feel stuck at a single line.
+    // Termius scrolls ~3 lines per notch, so re-emit LINE-mode events as
+    // PIXEL-mode events multiplied 3x before xterm's own handler runs.
+    // xterm then does the rest natively: viewport scroll on the normal
+    // buffer, arrow-key sequences on a TUI (alt buffer).
+    var WHEEL_LINES_PER_NOTCH = 3;
+    terminalElement.addEventListener('wheel', function(e) {
+      if (e.__termixWheel) return; // our own synthesized event
+      if (e.deltaMode !== WheelEvent.DOM_DELTA_LINE || !e.cancelable) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      var rowH = 0;
+      try { rowH = terminal._core._renderService.dimensions.css.cell.height; } catch (err) {}
+      if (!rowH) rowH = ${baseFontSize * 1.2};
+      try {
+        terminal.element.dispatchEvent(new WheelEvent('wheel', {
+          deltaY: e.deltaY * WHEEL_LINES_PER_NOTCH * rowH,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          cancelable: true,
+          shiftKey: e.shiftKey,
+          ctrlKey: e.ctrlKey,
+          altKey: e.altKey
+        }));
+      } catch (err) {}
+    }, { passive: false, capture: true });
+
+    // Touch-scroll. xterm already tracks the finger 1:1 with its own
+    // touchstart/touchmove handlers (viewport.scrollTop += fingerDelta),
+    // which gives the smooth Termius-style swipe on the normal buffer — so
+    // we must NOT dispatch extra wheel events there (it would double the
+    // scroll). We intercept the gesture to keep the WebView/page from
+    // hijacking the swipe, and we synthesize wheel events only on the
+    // alternate screen buffer (TUI apps such as vim), where the viewport
+    // cannot scroll and the TUI needs wheel input to move.
     (function() {
       var scrollTouchY = null;
       var pendingLines = 0;
@@ -879,6 +906,11 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         // Claim the gesture so WKWebView / Android WebView do not scroll the
         // whole page when the terminal content cannot scroll further.
         try { e.preventDefault(); } catch(e3) {}
+        // Normal buffer: xterm's native touch handler scrolls the viewport
+        // 1:1 with the finger; only the alt buffer (TUI) needs wheels.
+        var inAltBuffer = false;
+        try { inAltBuffer = terminal.buffer.active === terminal.buffer.alternate; } catch (e4) {}
+        if (!inAltBuffer) return;
         var dy = scrollTouchY - e.touches[0].clientY;
         scrollTouchY = e.touches[0].clientY;
         pendingLines += dy / lineH;
@@ -888,11 +920,13 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           try {
             terminal.options.disableStdin = false;
             try {
-              terminal.element.dispatchEvent(new WheelEvent('wheel', {
-                deltaY: whole,
+              var ev = new WheelEvent('wheel', {
+                deltaY: whole * WHEEL_LINES_PER_NOTCH,
                 deltaMode: WheelEvent.DOM_DELTA_LINE,
                 cancelable: true
-              }));
+              });
+              ev.__termixWheel = true;
+              terminal.element.dispatchEvent(ev);
             } finally {
               terminal.options.disableStdin = true;
             }
