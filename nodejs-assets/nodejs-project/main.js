@@ -278,28 +278,25 @@ function startShell(s) {
   const conn = s.conn;
   s.phase = "connected";
   log(s, "success", "Authenticated. Opening shell…");
-  conn.reqPty(
+  // ssh2 1.x API: shell(ptyWndOpts, shellOpts, cb) — the PTY request is the
+  // first argument (there is no public conn.reqPty in ssh2 1.x).
+  conn.shell(
     {
       cols: s.cols,
       rows: s.rows,
       term: "xterm-256color",
       mode: { echo: true, input: 1, output: 1, opost: 1, obaud: 38400 },
     },
-    (err) => {
-      if (err) return failSession(s, "PTY request failed: " + err.message);
-      conn.shell(
-        { env: ["TERM=xterm-256color"], cols: s.cols, rows: s.rows },
-        (err2, stream) => {
-          if (err2) return failSession(s, "Shell request failed: " + err2.message);
-          s.shell = stream;
-          stream.on("data", (d) => send(s.ws, { type: "data", data: d.toString("utf8") }));
-          stream.stderr.on("data", (d) =>
-            send(s.ws, { type: "data", data: d.toString("utf8") }),
-          );
-          log(s, "success", "Shell ready");
-          send(s.ws, { type: "connected" });
-        },
+    { env: ["TERM=xterm-256color"] },
+    (err, stream) => {
+      if (err) return failSession(s, "Shell request failed: " + err.message);
+      s.shell = stream;
+      stream.on("data", (d) => send(s.ws, { type: "data", data: d.toString("utf8") }));
+      stream.stderr.on("data", (d) =>
+        send(s.ws, { type: "data", data: d.toString("utf8") }),
       );
+      log(s, "success", "Shell ready");
+      send(s.ws, { type: "connected" });
     },
   );
 }
