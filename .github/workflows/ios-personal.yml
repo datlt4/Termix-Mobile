@@ -30,6 +30,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The embedded SSH engine has its own dependencies (ssh2, ws); they are
+      # not in git, and without them require("ssh2") throws as soon as the
+      # engine starts (first SSH connection) and Node exits the whole app.
+      # Optional deps skipped: cpu-features is a native addon (Android ships
+      # without it too; ssh2 falls back to pure JS).
+      - name: Install SSH engine dependencies
+        run: |
+          cd nodejs-assets/nodejs-project
+          npm ci --omit=optional --ignore-scripts
+          test -f node_modules/ssh2/package.json && test -f node_modules/ws/package.json
+
       - name: Personal-signing app config
         run: |
           node -e '
