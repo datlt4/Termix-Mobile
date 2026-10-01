@@ -881,20 +881,99 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       } catch (err) {}
     }, { passive: false, capture: true });
 
-    // Touch-scroll. xterm already tracks the finger 1:1 with its own
-    // touchstart/touchmove handlers (viewport.scrollTop += fingerDelta),
-    // which gives the smooth Termius-style swipe on the normal buffer — so
-    // we must NOT dispatch extra wheel events there (it would double the
-    // scroll). We intercept the gesture to keep the WebView/page from
-    // hijacking the swipe, and we synthesize wheel events only on the
-    // alternate screen buffer (TUI apps such as vim), where the viewport
-    // cannot scroll and the TUI needs wheel input to move.
+    // Touch handling, per terminal state:
+    //
+    // 1. TUI with SGR mouse tracking active (opencode, vim-with-mouse, ...):
+    //    the app drives the whole pointer protocol. The WebView's own
+    //    compatibility mouse events are invisible to the app (xterm gates
+    //    every SGR mouse report behind disableStdin, which stays on so the
+    //    RN input path remains the only keyboard source), so the TUI only
+    //    ever sees what we forward here. A quick tap is forwarded as a
+    //    synthesized click (mousedown+mouseup at the tap position), a real
+    //    swipe as synthesized SGR wheel reports. Once the gesture is
+    //    claimed as a swipe, preventDefault cancels the remaining
+    //    compatibility mouse events so the TUI never sees a half-drag.
+    //
+    // 2. Regular shell: xterm already tracks the finger 1:1 with its own
+    //    touchstart/touchmove handlers (viewport.scrollTop += fingerDelta),
+    //    which is the smooth Termius-style swipe — we must NOT dispatch
+    //    extra wheel events on the normal buffer (it would double the
+    //    scroll). We only claim the gesture (preventDefault) so the
+    //    WebView/page cannot hijack it.
+    //
+    // 3. Alt buffer without mouse tracking (classic TUIs): the viewport
+    //    cannot scroll, so swipes are synthesized as wheel events; xterm
+    //    converts them to arrow-key sequences the TUI understands.
     (function() {
+      var SWIPE_THRESHOLD_PX = 10;
       var scrollTouchY = null;
+      var gestureStartX = 0;
+      var gestureStartY = 0;
+      var lastX = 0;
+      var lastY = 0;
+      var swiping = false;
       var pendingLines = 0;
       var lineH = terminal._core._renderService.dimensions.css.cell.height || ${baseFontSize * 1.2};
+
+      function mouseActive() {
+        try {
+          var svc = terminal._core.coreMouseService || terminal._core._coreMouseService;
+          return !!svc && !!svc.areMouseEventsActive;
+        } catch (err) { return false; }
+      }
+      function inAltBuffer() {
+        try { return terminal.buffer.active === terminal.buffer.alternate; } catch (err) { return false; }
+      }
+      // The SGR report emitters respect disableStdin, so forward
+      // synthesized pointer input only inside a brief stdin window.
+      function dispatchWithStdin(fn) {
+        terminal.options.disableStdin = false;
+        try {
+          fn();
+        } finally {
+          terminal.options.disableStdin = true;
+        }
+      }
+      function dispatchSyntheticWheel(whole) {
+        dispatchWithStdin(function() {
+          var ev = new WheelEvent('wheel', {
+            deltaY: whole * WHEEL_LINES_PER_NOTCH,
+            deltaMode: WheelEvent.DOM_DELTA_LINE,
+            cancelable: true,
+            clientX: lastX,
+            clientY: lastY
+          });
+          ev.__termixWheel = true;
+          terminal.element.dispatchEvent(ev);
+        });
+      }
+      function dispatchSyntheticTap() {
+        dispatchWithStdin(function() {
+          terminal.element.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles: true, cancelable: true,
+            button: 0, buttons: 1,
+            clientX: lastX, clientY: lastY,
+            view: window
+          }));
+          terminal.element.dispatchEvent(new MouseEvent('mouseup', {
+            bubbles: true, cancelable: true,
+            button: 0, buttons: 0,
+            clientX: lastX, clientY: lastY,
+            view: window
+          }));
+        });
+      }
+
       terminalElement.addEventListener('touchstart', function(e) {
-        if (e.touches.length === 1) scrollTouchY = e.touches[0].clientY;
+        if (e.touches.length === 1) {
+          scrollTouchY = e.touches[0].clientY;
+          gestureStartX = e.touches[0].clientX;
+          gestureStartY = e.touches[0].clientY;
+          lastX = gestureStartX;
+          lastY = gestureStartY;
+          swiping = false;
+          pendingLines = 0;
+        }
       }, { passive: true, capture: true });
       terminalElement.addEventListener('touchmove', function(e) {
         if (scrollTouchY === null || e.touches.length !== 1) return;
@@ -903,38 +982,58 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         if (typeof isCurrentlySelecting !== 'undefined' && isCurrentlySelecting) {
           return;
         }
+        var x = e.touches[0].clientX;
+        var y = e.touches[0].clientY;
+        lastX = x;
+        lastY = y;
+
+        if (mouseActive()) {
+          if (!swiping) {
+            var moved = Math.abs(x - gestureStartX) + Math.abs(y - gestureStartY);
+            if (moved < SWIPE_THRESHOLD_PX) return; // still a tap/click
+            swiping = true;
+          }
+          e.preventDefault();
+          var dyM = scrollTouchY - y;
+          scrollTouchY = y;
+          pendingLines += dyM / lineH;
+          var wholeM = Math.trunc(pendingLines);
+          if (wholeM !== 0) {
+            pendingLines -= wholeM;
+            try { dispatchSyntheticWheel(wholeM); } catch (e2) {}
+          }
+          return;
+        }
+
         // Claim the gesture so WKWebView / Android WebView do not scroll the
         // whole page when the terminal content cannot scroll further.
         try { e.preventDefault(); } catch(e3) {}
         // Normal buffer: xterm's native touch handler scrolls the viewport
-        // 1:1 with the finger; only the alt buffer (TUI) needs wheels.
-        var inAltBuffer = false;
-        try { inAltBuffer = terminal.buffer.active === terminal.buffer.alternate; } catch (e4) {}
-        if (!inAltBuffer) return;
-        var dy = scrollTouchY - e.touches[0].clientY;
-        scrollTouchY = e.touches[0].clientY;
+        // 1:1 with the finger; only the alt buffer (TUI without mouse
+        // tracking) needs synthesized wheels.
+        if (!inAltBuffer()) return;
+        var dy = scrollTouchY - y;
+        scrollTouchY = y;
         pendingLines += dy / lineH;
         var whole = Math.trunc(pendingLines);
         if (whole !== 0) {
           pendingLines -= whole;
-          try {
-            terminal.options.disableStdin = false;
-            try {
-              var ev = new WheelEvent('wheel', {
-                deltaY: whole * WHEEL_LINES_PER_NOTCH,
-                deltaMode: WheelEvent.DOM_DELTA_LINE,
-                cancelable: true
-              });
-              ev.__termixWheel = true;
-              terminal.element.dispatchEvent(ev);
-            } finally {
-              terminal.options.disableStdin = true;
-            }
-          } catch(e2) {}
+          try { dispatchSyntheticWheel(whole); } catch (e2) {}
         }
       }, { passive: false, capture: true });
       terminalElement.addEventListener('touchend', function() {
+        if (mouseActive() && !swiping && scrollTouchY !== null) {
+          // Quick tap on a mouse-tracked TUI: forward the click the app
+          // would otherwise never receive.
+          try { dispatchSyntheticTap(); } catch (e2) {}
+        }
         scrollTouchY = null;
+        swiping = false;
+        pendingLines = 0;
+      }, { passive: true, capture: true });
+      terminalElement.addEventListener('touchcancel', function() {
+        scrollTouchY = null;
+        swiping = false;
         pendingLines = 0;
       }, { passive: true, capture: true });
     })();
