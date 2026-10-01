@@ -53,9 +53,19 @@ jobs:
       - name: Install CocoaPods dependencies
         run: cd ios && pod install
 
+      # nodejs-mobile's "Build Native Modules" phase insists on Node 18 on
+      # Xcode's PATH (the Android build runs Gradle on Node 18 too); the Expo
+      # CLI steps above need a newer Node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
       - name: Build unsigned archive
         run: |
           cd ios
+          node --version
+          # Keep Xcode's bundling/script phases on the Node 18 now first on PATH.
+          rm -f .xcode.env.local
           xcodebuild -workspace Termix.xcworkspace \
             -scheme Termix \
             -configuration Release \
