@@ -387,6 +387,16 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       -ms-touch-action: none;
     }
 
+    /* Keep the touch target stable. The DOM renderer replaces row elements on
+       every redraw; a touch that started on a row span then keeps targeting a
+       node that is no longer in the document, so every later touchmove /
+       touchend never reached the gesture handlers: a TUI scroll stopped after
+       its first tick (measured: 2 of 125 touchmoves delivered during a slow
+       drag). With rows transparent to hits the target is .xterm-screen. */
+    .xterm-rows, .xterm-rows * {
+      pointer-events: none;
+    }
+
     .xterm {
       font-feature-settings: "liga" 1, "calt" 1;
       text-rendering: optimizeLegibility;
