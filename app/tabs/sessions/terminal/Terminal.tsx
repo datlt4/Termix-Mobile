@@ -197,7 +197,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       xtermJs: string;
       xtermCss: string;
       fitAddonJs: string;
-      canvasAddonJs: string;
+      webglAddonJs: string;
       nerdFontBase64?: string;
     } | null>(null);
 
@@ -282,7 +282,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         xtermJs: string;
         xtermCss: string;
         fitAddonJs: string;
-        canvasAddonJs: string;
+        webglAddonJs: string;
         nerdFontBase64?: string;
       }) => {
         const { width, height } = screenDimensions;
@@ -336,7 +336,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
   <style>${assets.xtermCss}</style>
   <script>${assets.xtermJs}</script>
   <script>${assets.fitAddonJs}</script>
-  <script>${assets.canvasAddonJs}</script>
+  <script>${assets.webglAddonJs}</script>
   <style>
     ${nerdFontFace}
 
@@ -536,15 +536,20 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
     const fitAddon = new FitAddon.FitAddon();
     terminal.loadAddon(fitAddon);
 
-    // Prefer the canvas renderer on mobile: the DOM renderer is much slower
-    // for scrolling and high-volume output. Fall back to DOM rendering if the
-    // canvas addon is unavailable or fails against this xterm build.
+    // GPU renderer: the DOM renderer is much slower for scrolling and TUI
+    // redraws. (The canvas addon bundled before never loaded against its
+    // xterm, so the terminal had silently been on the DOM renderer.) A lost
+    // WebGL context disposes the addon, which falls back to the DOM renderer.
     try {
-      if (window.CanvasAddon) {
-        terminal.loadAddon(new window.CanvasAddon.CanvasAddon());
+      if (window.WebglAddon) {
+        const webgl = new window.WebglAddon.WebglAddon();
+        webgl.onContextLoss(function() {
+          try { webgl.dispose(); } catch (e2) {}
+        });
+        terminal.loadAddon(webgl);
       }
     } catch (e) {
-      console.warn('canvas renderer unavailable, using DOM renderer', e);
+      console.warn('webgl renderer unavailable, using DOM renderer', e);
     }
 
     terminal.open(document.getElementById('terminal'));
@@ -1078,18 +1083,19 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         if (dt <= 0 || performance.now() - b.t > 80) return 0;
         return (a.y - b.y) / dt;
       }
+      // Normal buffer: scroll xterm's own scrollback; alt buffer: wheel
+      // reports (mouse-tracked TUIs get them through the paced queue).
+      function scrollLinesFor(whole) {
+        if (mouseActive()) queueWheel(whole);
+        else if (inAltBuffer()) dispatchSyntheticWheel(whole);
+        else terminal.scrollLines(whole);
+      }
       function scrollByPixels(dy) {
-        if (mouseActive() || inAltBuffer()) {
-          pendingLines += dy / lineH;
-          var whole = Math.trunc(pendingLines);
-          if (whole === 0) return;
-          pendingLines -= whole;
-          if (mouseActive()) queueWheel(whole);
-          else dispatchSyntheticWheel(whole);
-          return;
-        }
-        var viewport = terminal.element.querySelector('.xterm-viewport');
-        if (viewport) viewport.scrollTop += dy;
+        pendingLines += dy / lineH;
+        var whole = Math.trunc(pendingLines);
+        if (whole === 0) return;
+        pendingLines -= whole;
+        scrollLinesFor(whole);
       }
       function startMomentum(v) {
         stopMomentum();
@@ -1171,20 +1177,13 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         }
 
         // Claim the gesture so WKWebView / Android WebView do not scroll the
-        // whole page when the terminal content cannot scroll further.
+        // whole page when the terminal content cannot scroll further. xterm 6
+        // does not scroll the normal buffer on touch here, so this handler
+        // drives every buffer.
         try { e.preventDefault(); } catch(e3) {}
-        // Normal buffer: xterm's native touch handler scrolls the viewport
-        // 1:1 with the finger; only the alt buffer (TUI without mouse
-        // tracking) needs synthesized wheels.
-        if (!inAltBuffer()) return;
         var dy = scrollTouchY - y;
         scrollTouchY = y;
-        pendingLines += dy / lineH;
-        var whole = Math.trunc(pendingLines);
-        if (whole !== 0) {
-          pendingLines -= whole;
-          try { dispatchSyntheticWheel(whole); } catch (e2) {}
-        }
+        try { scrollByPixels(dy); } catch (e2) {}
       }, { passive: false, capture: true });
       terminalElement.addEventListener('touchend', function() {
         var selecting = typeof isCurrentlySelecting !== 'undefined' && isCurrentlySelecting;
@@ -1203,6 +1202,13 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         tapStopsFling = false;
         if (flick) startMomentum(releaseVelocity());
       }, { passive: true, capture: true });
+      // Keep scroll swipes away from xterm 6's own touch gesture handler
+      // (listens on document; it would scroll a second time). Bubble phase
+      // and registered last, so the long-press / selection listeners on this
+      // element still see every move.
+      terminalElement.addEventListener('touchmove', function(e) {
+        if (scrollTouchY !== null) e.stopPropagation();
+      }, { passive: true });
       terminalElement.addEventListener('touchcancel', function() {
         scrollTouchY = null;
         swiping = false;
