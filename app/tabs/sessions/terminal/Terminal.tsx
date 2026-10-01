@@ -680,8 +680,12 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
     }, { passive: false });
 
     // [termix-dbg] Light tracing to logcat (chromium console) to diagnose
-    // scroll / input / resize issues on device.
+    // scroll / input / resize issues on device. Off by default: every line
+    // is mirrored to React Native through postMessage, and the per-tick
+    // calls in the scroll path competed with terminal data on the bridge.
+    var TERMIX_DEBUG = false;
     function termixLog(tag, extra) {
+      if (!TERMIX_DEBUG) return;
       try { console.log('[termix] ' + tag + (extra ? ' ' + extra : '')); } catch (e) {}
     }
     // True while a TUI (opencode & friends) has mouse tracking enabled and
@@ -1035,8 +1039,76 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         });
       }
 
+      // Fling momentum. Every scroll path (xterm's own viewport drag, the
+      // TUI wheel queue, alt-buffer wheels) only moves while the finger
+      // does, so a quick flick stopped after a few lines. Track the finger
+      // velocity over the last 100ms and keep scrolling after release with
+      // friction, like a native scroll view.
+      var velSamples = [];
+      var momentumFrame = null;
+      var tapStopsFling = false;
+      function stopMomentum() {
+        if (momentumFrame === null) return false;
+        cancelAnimationFrame(momentumFrame);
+        momentumFrame = null;
+        return true;
+      }
+      function trackVelocity(y) {
+        var now = performance.now();
+        velSamples.push({ t: now, y: y });
+        while (velSamples.length > 2 && now - velSamples[0].t > 100) velSamples.shift();
+      }
+      // px/ms, same sign as the touchmove dy (positive = towards newer lines).
+      function releaseVelocity() {
+        if (velSamples.length < 2) return 0;
+        var a = velSamples[0];
+        var b = velSamples[velSamples.length - 1];
+        var dt = b.t - a.t;
+        // The finger rested before lifting: that is a drag, not a flick.
+        if (dt <= 0 || performance.now() - b.t > 80) return 0;
+        return (a.y - b.y) / dt;
+      }
+      function scrollByPixels(dy) {
+        if (mouseActive() || inAltBuffer()) {
+          pendingLines += dy / lineH;
+          var whole = Math.trunc(pendingLines);
+          if (whole === 0) return;
+          pendingLines -= whole;
+          if (mouseActive()) queueWheel(whole);
+          else dispatchSyntheticWheel(whole);
+          return;
+        }
+        var viewport = terminal.element.querySelector('.xterm-viewport');
+        if (viewport) viewport.scrollTop += dy;
+      }
+      function startMomentum(v) {
+        stopMomentum();
+        if (Math.abs(v) < 0.3) return;
+        v = Math.max(-8, Math.min(8, v));
+        pendingLines = 0;
+        var last = performance.now();
+        function step(now) {
+          var dt = Math.min(now - last, 50);
+          last = now;
+          try { scrollByPixels(v * dt); } catch (e2) {}
+          // ~0.94 per 16ms frame: a fast flick coasts ~1s.
+          v *= Math.pow(0.996, dt);
+          if (Math.abs(v) < 0.05) {
+            momentumFrame = null;
+            return;
+          }
+          momentumFrame = requestAnimationFrame(step);
+        }
+        momentumFrame = requestAnimationFrame(step);
+      }
+
       terminalElement.addEventListener('touchstart', function(e) {
         if (e.touches.length === 1) {
+          // A touch during a fling only stops it — it must not also click
+          // into a mouse-tracked TUI.
+          tapStopsFling = stopMomentum();
+          velSamples = [];
+          trackVelocity(e.touches[0].clientY);
           scrollTouchY = e.touches[0].clientY;
           gestureStartX = e.touches[0].clientX;
           gestureStartY = e.touches[0].clientY;
@@ -1054,6 +1126,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         var y = t0.clientY;
         lastX = x;
         lastY = y;
+        trackVelocity(y);
 
         if (mouseActive()) {
           // Mouse-tracked TUI owns the gesture. This branch must run BEFORE
@@ -1104,7 +1177,11 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         }
       }, { passive: false, capture: true });
       terminalElement.addEventListener('touchend', function() {
-        if (mouseActive() && !swiping && scrollTouchY !== null) {
+        var selecting = typeof isCurrentlySelecting !== 'undefined' && isCurrentlySelecting;
+        var flick = scrollTouchY !== null && (mouseActive()
+          ? swiping
+          : !selecting && Math.abs(lastY - gestureStartY) >= SWIPE_THRESHOLD_PX);
+        if (mouseActive() && !swiping && scrollTouchY !== null && !tapStopsFling) {
           // Quick tap on a mouse-tracked TUI: forward the click the app
           // would otherwise never receive.
           termixLog('tap', '@' + Math.round(lastX) + ',' + Math.round(lastY));
@@ -1113,6 +1190,8 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         scrollTouchY = null;
         swiping = false;
         pendingLines = 0;
+        tapStopsFling = false;
+        if (flick) startMomentum(releaseVelocity());
       }, { passive: true, capture: true });
       terminalElement.addEventListener('touchcancel', function() {
         scrollTouchY = null;
@@ -1322,12 +1401,6 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           case "input":
             // Wheel/mouse input synthesized inside the WebView (xterm onData),
             // forwarded to the pty so TUI apps can scroll their context.
-            console.log(
-              "[termix] input->ws " +
-                String(message.data).length +
-                "b " +
-                JSON.stringify(String(message.data).slice(0, 16)),
-            );
             wsManagerRef.current?.sendInput(message.data);
             break;
 
@@ -1403,11 +1476,6 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           }
         },
         onData: (data) => {
-          console.log(
-            "[termix] data-in " +
-              (data && data.length ? data.length : String(data).length) +
-              "b",
-          );
           pendingDataRef.current.push(data);
           if (!dataFlushTimerRef.current) {
             dataFlushTimerRef.current = setTimeout(() => {

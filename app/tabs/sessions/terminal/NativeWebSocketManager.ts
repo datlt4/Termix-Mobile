@@ -190,12 +190,6 @@ export class NativeWebSocketManager {
 
   sendInput(data: string): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      console.log(
-        "[termix] ws.sendInput " +
-          data.length +
-          "b " +
-          JSON.stringify(String(data).slice(0, 16)),
-      );
       try {
         this.ws.send(JSON.stringify({ type: "input", data }));
       } catch (e) {}

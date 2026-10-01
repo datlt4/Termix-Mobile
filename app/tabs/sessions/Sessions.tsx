@@ -166,6 +166,16 @@ export default function Sessions() {
     (session) => session.id === activeSessionId,
   );
 
+  // The box sits in the bar, under the session tab bar, so while it is open
+  // the tab bar moves up and the terminal shrinks by the same amount (the
+  // box never covers the TUI's bottom lines).
+  const draftBoxSpace =
+    draftBoxOpen &&
+    activeSession?.type === "terminal" &&
+    !isCustomKeyboardVisible
+      ? DRAFT_BOX_HEIGHT
+      : 0;
+
   const getActiveTerminalRef = useCallback(() => {
     return activeSessionId ? terminalRefs.current[activeSessionId] : null;
   }, [activeSessionId]);
@@ -272,14 +282,14 @@ export default function Sessions() {
     }
 
     if (keyboardIntentionallyHiddenRef.current) {
-      return KEYBOARD_BAR_HEIGHT_EXTENDED;
+      return KEYBOARD_BAR_HEIGHT_EXTENDED + draftBoxSpace;
     }
 
     if (isKeyboardVisible && currentKeyboardHeight > 0) {
-      return KEYBOARD_BAR_HEIGHT + currentKeyboardHeight;
+      return KEYBOARD_BAR_HEIGHT + currentKeyboardHeight + draftBoxSpace;
     }
 
-    return KEYBOARD_BAR_HEIGHT;
+    return KEYBOARD_BAR_HEIGHT + draftBoxSpace;
   };
 
   const getBottomMargin = (sessionType: SessionType = "terminal") => {
@@ -296,16 +306,21 @@ export default function Sessions() {
     }
 
     if (keyboardIntentionallyHiddenRef.current) {
-      return SESSION_TAB_BAR_HEIGHT + KEYBOARD_BAR_HEIGHT_EXTENDED;
+      return (
+        SESSION_TAB_BAR_HEIGHT + KEYBOARD_BAR_HEIGHT_EXTENDED + draftBoxSpace
+      );
     }
 
     if (isKeyboardVisible && currentKeyboardHeight > 0) {
       return (
-        SESSION_TAB_BAR_HEIGHT + KEYBOARD_BAR_HEIGHT + currentKeyboardHeight
+        SESSION_TAB_BAR_HEIGHT +
+        KEYBOARD_BAR_HEIGHT +
+        currentKeyboardHeight +
+        draftBoxSpace
       );
     }
 
-    return SESSION_TAB_BAR_HEIGHT + KEYBOARD_BAR_HEIGHT;
+    return SESSION_TAB_BAR_HEIGHT + KEYBOARD_BAR_HEIGHT + draftBoxSpace;
   };
 
   useEffect(() => {
@@ -906,7 +921,6 @@ export default function Sessions() {
               }
               bottomInset={KEYBOARD_BAR_BOTTOM_INSET}
               onOpenSnippets={handleOpenSnippets}
-              draftBoxLift={SESSION_TAB_BAR_HEIGHT + 4}
               onDirectInputFocus={() => {
                 callImeInput(hiddenInputRef, "focus");
               }}

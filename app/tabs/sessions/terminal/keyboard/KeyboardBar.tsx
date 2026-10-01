@@ -38,9 +38,6 @@ interface KeyboardBarProps {
   /** Called when the draft-text box closes so the hidden terminal input can
    *  take focus back (direct typing resumes). */
   onDirectInputFocus?: () => void;
-  /** Extra lift (px) for the draft box so it clears whatever sits directly
-   *  above the key row (the session tab bar) instead of being covered by it. */
-  draftBoxLift?: number;
 }
 
 export default function KeyboardBar({
@@ -52,7 +49,6 @@ export default function KeyboardBar({
   onOpenSnippets,
   onDraftBoxChange,
   onDirectInputFocus,
-  draftBoxLift = 0,
 }: KeyboardBarProps) {
   const { config } = useKeyboardCustomization();
   const { isLandscape } = useOrientation();
@@ -78,6 +74,13 @@ export default function KeyboardBar({
     // reopening it.
     setTimeout(() => draftInputRef.current?.focus(), 0);
   };
+
+  // The bar unmounts with the box open when the user switches to a
+  // non-terminal tab or the custom keyboard; the parent must not keep
+  // reserving the box's space for a bar that comes back closed.
+  const onDraftBoxChangeRef = useRef(onDraftBoxChange);
+  onDraftBoxChangeRef.current = onDraftBoxChange;
+  useEffect(() => () => onDraftBoxChangeRef.current?.(false), []);
 
   const closeDraftBox = () => {
     setDraftOpen(false);
@@ -222,6 +225,14 @@ export default function KeyboardBar({
 
   // The paper-plane draft toggle sits right after the ESC key (the usual
   // escape hatch), or at the start of the row when ESC is not configured.
+  // Sized like KeyboardKey (its min-h/min-w per keySize) so it lines up
+  // with the keys around it.
+  const keySide =
+    config.settings.keySize === "small"
+      ? 32
+      : config.settings.keySize === "large"
+        ? 42
+        : 36;
   const draftToggleButton = (
     <TouchableOpacity
       accessibilityRole="button"
@@ -230,13 +241,14 @@ export default function KeyboardBar({
       }
       onPress={toggleDraftBox}
       style={{
-        height: 32,
-        paddingHorizontal: 10,
+        height: keySide,
+        minWidth: keySide,
+        paddingHorizontal: 8,
         alignItems: "center",
         justifyContent: "center",
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: draftOpen ? ACCENT : BORDER_COLORS.PRIMARY,
-        backgroundColor: draftOpen ? ACCENT : BACKGROUNDS.CARD,
+        borderWidth: 1,
+        borderColor: draftOpen ? ACCENT : BORDER_COLORS.BUTTON,
+        backgroundColor: draftOpen ? ACCENT : BACKGROUNDS.BUTTON,
       }}
     >
       <Send
@@ -270,14 +282,12 @@ export default function KeyboardBar({
       {draftOpen && (
         <View
           style={{
-            // Float above the key row AND above the session tab bar that
-            // sits directly on top of the key row — without the extra lift
-            // the box renders exactly under the tab bar and is completely
-            // covered (tab bar zIndex 1004 > bar container 1003).
-            position: "absolute",
-            left: 0,
-            right: 0,
-            top: -46 - draftBoxLift,
+            // In normal flow, directly above the key row. It used to float
+            // (absolute, negative top) outside this view's bounds — Android
+            // draws such a child but never hit-tests it, so every tap on the
+            // box fell through to the terminal WebView underneath (a click
+            // into opencode). The parent grows the bar by DRAFT_BOX_HEIGHT
+            // and moves the session tab bar above the box instead.
             height: 44,
             flexDirection: "row",
             alignItems: "center",
