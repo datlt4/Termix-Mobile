@@ -1,0 +1,90 @@
+name: Build iOS (personal, unsigned)
+
+# FORK: an unsigned device build for re-signing with a free (personal) Apple
+# ID on a Mac that cannot run Xcode 16 itself. Push to the `ios-build` branch
+# (or run manually); the IPA is attached to the `ios-dev` pre-release.
+#
+# Personal teams cannot use App Groups and cannot sign the upstream bundle
+# id, so this build uses com.datlt4.termix and leaves out the widget
+# extension (the widgets module no-ops without its App Group).
+
+on:
+  push:
+    branches: [ios-build]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Personal-signing app config
+        run: |
+          node -e '
+            const fs = require("fs");
+            const app = JSON.parse(fs.readFileSync("app.json", "utf8"));
+            const e = app.expo;
+            e.ios.bundleIdentifier = "com.datlt4.termix";
+            delete e.ios.appleTeamId;
+            e.plugins = e.plugins.filter((p) => (Array.isArray(p) ? p[0] : p) !== "./plugins/withTermixWidgets.js");
+            fs.writeFileSync("app.json", JSON.stringify(app, null, 2));
+          '
+
+      - name: Generate iOS project
+        run: npx expo prebuild --platform ios --clean --no-install
+        env:
+          CI: "1"
+
+      - name: Show Xcode
+        run: xcodebuild -version
+
+      - name: Install CocoaPods dependencies
+        run: cd ios && pod install
+
+      - name: Build unsigned archive
+        run: |
+          cd ios
+          xcodebuild -workspace Termix.xcworkspace \
+            -scheme Termix \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath ../release/Termix.xcarchive \
+            archive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" | tail -n 200
+          test -d ../release/Termix.xcarchive/Products/Applications/Termix.app
+        env:
+          NODEJS_MOBILE_BUILD_NATIVE_MODULES: "0"
+
+      - name: Package IPA
+        run: |
+          cd release
+          mkdir -p Payload
+          cp -r Termix.xcarchive/Products/Applications/Termix.app Payload/
+          zip -qr termix-ios-unsigned.ipa Payload
+          ls -la termix-ios-unsigned.ipa
+
+      - name: Publish to the ios-dev pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ios-dev --yes --cleanup-tag || true
+          gh release create ios-dev release/termix-ios-unsigned.ipa \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "iOS dev build (unsigned)" \
+            --notes "Unsigned device build of $GITHUB_SHA for personal re-signing."
