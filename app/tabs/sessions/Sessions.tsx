@@ -122,6 +122,15 @@ export default function Sessions() {
   >({});
   const isSelectingRef = useRef(false);
   const keyboardWasHiddenBeforeSelectionRef = useRef(false);
+  // Draft-text box (paper-plane button on the keyboard bar): a plain RN
+  // TextInput where any language composes normally; the text is inserted
+  // into the terminal at the cursor when sent.
+  const [draftBoxOpen, setDraftBoxOpen] = useState(false);
+  const draftBoxOpenRef = useRef(false);
+  const handleDraftBoxChange = useCallback((open: boolean) => {
+    draftBoxOpenRef.current = open;
+    setDraftBoxOpen(open);
+  }, []);
 
   const maxKeyboardHeight = getMaxKeyboardHeight(height, isLandscape, isIPad);
   const effectiveKeyboardHeight = isLandscape
@@ -140,6 +149,10 @@ export default function Sessions() {
   const CUSTOM_KEYBOARD_TAB_HEIGHT = 36;
 
   const KEYBOARD_BAR_HEIGHT = isLandscape ? 48 : 52;
+  // Extra height of the keyboard bar while the draft-text box is open —
+  // the bar grows UPWARD (bottom stays pinned above the system keyboard)
+  // so the key row is never pushed down out of view.
+  const DRAFT_BOX_HEIGHT = 46;
   // When the system keyboard is dismissed the keyboard bar reserves the
   // home-indicator safe area below its keys. The TabBar floats directly on top
   // of the bar, so it must be lifted by the keys' height PLUS that same
@@ -161,12 +174,28 @@ export default function Sessions() {
     (text: string) => {
       const activeRef = getActiveTerminalRef();
       if (!activeRef?.current || !text) {
+        console.log(
+          "[termix] ime.commit DROP " +
+            JSON.stringify(text) +
+            " activeRef=" +
+            !!activeRef?.current,
+        );
         return;
       }
 
       const translatedText = translateCommittedText(text, activeModifiers);
       if (translatedText) {
+        console.log(
+          "[termix] ime.commit send " +
+            JSON.stringify(translatedText) +
+            " composition=" +
+            compositionActiveRef.current,
+        );
         activeRef.current.sendInput(translatedText);
+      } else {
+        console.log(
+          "[termix] ime.commit DROP (translated empty) " + JSON.stringify(text),
+        );
       }
     },
     [activeModifiers, getActiveTerminalRef],
@@ -175,6 +204,13 @@ export default function Sessions() {
   const dispatchSpecialKey = useCallback(
     (event: TerminalSpecialKeyEvent) => {
       if (compositionActiveRef.current) {
+        console.log(
+          "[termix] ime.key DROP " +
+            event.key +
+            " (composition active, src=" +
+            event.source +
+            ")",
+        );
         return;
       }
 
@@ -843,12 +879,17 @@ export default function Sessions() {
                   : 0,
               left: 0,
               right: 0,
-              height: keyboardIntentionallyHiddenRef.current
-                ? KEYBOARD_BAR_HEIGHT_EXTENDED
-                : KEYBOARD_BAR_HEIGHT,
+              height:
+                (keyboardIntentionallyHiddenRef.current
+                  ? KEYBOARD_BAR_HEIGHT_EXTENDED
+                  : KEYBOARD_BAR_HEIGHT) +
+                (draftBoxOpen ? DRAFT_BOX_HEIGHT : 0),
               zIndex: 1003,
               overflow: "visible",
-              justifyContent: "center",
+              // With the draft box open, pin the key row to the bottom of
+              // the (taller) bar so the box extends UPWARD into the
+              // terminal area instead of pushing the keys below the screen.
+              justifyContent: draftBoxOpen ? "flex-end" : "center",
             }}
           >
             <KeyboardBar
@@ -858,12 +899,17 @@ export default function Sessions() {
                   : React.createRef<TerminalHandle>()
               }
               isVisible={true}
+              onDraftBoxChange={handleDraftBoxChange}
               onModifierChange={handleModifierChange}
               isKeyboardIntentionallyHidden={
                 keyboardIntentionallyHiddenRef.current
               }
               bottomInset={KEYBOARD_BAR_BOTTOM_INSET}
               onOpenSnippets={handleOpenSnippets}
+              draftBoxLift={SESSION_TAB_BAR_HEIGHT + 4}
+              onDirectInputFocus={() => {
+                callImeInput(hiddenInputRef, "focus");
+              }}
             />
           </View>
         )}
@@ -994,6 +1040,7 @@ export default function Sessions() {
               if (
                 !keyboardIntentionallyHiddenRef.current &&
                 !isCustomKeyboardVisible &&
+                !draftBoxOpenRef.current &&
                 activeSession?.type === "terminal" &&
                 !isDialogOpen &&
                 !isCurrentlySelecting &&

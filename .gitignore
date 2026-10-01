@@ -28,6 +28,9 @@ yarn-error.*
 app-example
 /ios
 /android
+# android build outputs of local modules (do not commit)
+modules/*/android/build/
+modules/*/build/
 /credentials/
 /credentials.json
 /nul

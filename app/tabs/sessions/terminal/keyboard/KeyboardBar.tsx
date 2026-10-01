@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   Text,
+  TextInput,
 } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import { Send, X } from "lucide-react-native";
 import { TerminalHandle } from "../Terminal";
 import KeyboardKey from "./KeyboardKey";
 import { useKeyboardCustomization } from "@/app/contexts/KeyboardCustomizationContext";
@@ -30,6 +32,15 @@ interface KeyboardBarProps {
   isKeyboardIntentionallyHidden?: boolean;
   bottomInset?: number;
   onOpenSnippets?: () => void;
+  /** Report the draft-box open state so the parent can size the bar
+   *  (raise it) and stop the hidden terminal input from stealing focus. */
+  onDraftBoxChange?: (open: boolean) => void;
+  /** Called when the draft-text box closes so the hidden terminal input can
+   *  take focus back (direct typing resumes). */
+  onDirectInputFocus?: () => void;
+  /** Extra lift (px) for the draft box so it clears whatever sits directly
+   *  above the key row (the session tab bar) instead of being covered by it. */
+  draftBoxLift?: number;
 }
 
 export default function KeyboardBar({
@@ -39,12 +50,51 @@ export default function KeyboardBar({
   isKeyboardIntentionallyHidden = false,
   bottomInset = 0,
   onOpenSnippets,
+  onDraftBoxChange,
+  onDirectInputFocus,
+  draftBoxLift = 0,
 }: KeyboardBarProps) {
   const { config } = useKeyboardCustomization();
   const { isLandscape } = useOrientation();
   const [ctrlPressed, setCtrlPressed] = useState(false);
   const [altPressed, setAltPressed] = useState(false);
   const [shiftPressed, setShiftPressed] = useState(false);
+
+  // Draft-text box: a plain RN TextInput with the system keyboard, so any
+  // language (Vietnamese, Chinese, …) composes normally. The text is only
+  // inserted into the terminal at the cursor position when the user sends
+  // it. While the box is open, direct terminal typing is paused; when it
+  // closes, the hidden terminal input takes focus back.
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [draftText, setDraftText] = useState("");
+  const draftInputRef = useRef<TextInput>(null);
+
+  const sendDraft = () => {
+    const text = draftText;
+    if (!text) return;
+    terminalRef.current?.sendInput(text);
+    setDraftText("");
+    // Keep the box open + focused so the user can insert more text without
+    // reopening it.
+    setTimeout(() => draftInputRef.current?.focus(), 0);
+  };
+
+  const closeDraftBox = () => {
+    setDraftOpen(false);
+    setDraftText("");
+    onDraftBoxChange?.(false);
+    onDirectInputFocus?.();
+  };
+
+  const toggleDraftBox = () => {
+    if (draftOpen) {
+      closeDraftBox();
+    } else {
+      setDraftOpen(true);
+      onDraftBoxChange?.(true);
+      setTimeout(() => draftInputRef.current?.focus(), 0);
+    }
+  };
 
   const sendKey = (key: string) => {
     terminalRef.current?.sendInput(key);
@@ -170,6 +220,43 @@ export default function KeyboardBar({
     (key) => key.id === "paste",
   );
 
+  // The paper-plane draft toggle sits right after the ESC key (the usual
+  // escape hatch), or at the start of the row when ESC is not configured.
+  const draftToggleButton = (
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityLabel={
+        draftOpen ? "Close text insert box" : "Insert text at terminal cursor"
+      }
+      onPress={toggleDraftBox}
+      style={{
+        height: 32,
+        paddingHorizontal: 10,
+        alignItems: "center",
+        justifyContent: "center",
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: draftOpen ? ACCENT : BORDER_COLORS.PRIMARY,
+        backgroundColor: draftOpen ? ACCENT : BACKGROUNDS.CARD,
+      }}
+    >
+      <Send
+        size={15}
+        color={draftOpen ? BACKGROUNDS.DARKEST : ACCENT}
+      />
+    </TouchableOpacity>
+  );
+
+  const renderRow = (list: KeyConfig[], prefix: string) =>
+    list.map((key, index) => {
+      const isEscape = key.id === "escape";
+      return (
+        <React.Fragment key={`${prefix}-${key.id}-${index}`}>
+          {isEscape && draftToggleButton}
+          {renderKey(key, index)}
+        </React.Fragment>
+      );
+    });
+
   return (
     <View
       style={{
@@ -180,6 +267,84 @@ export default function KeyboardBar({
         borderTopColor: BORDER_COLORS.PRIMARY,
       }}
     >
+      {draftOpen && (
+        <View
+          style={{
+            // Float above the key row AND above the session tab bar that
+            // sits directly on top of the key row — without the extra lift
+            // the box renders exactly under the tab bar and is completely
+            // covered (tab bar zIndex 1004 > bar container 1003).
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: -46 - draftBoxLift,
+            height: 44,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            paddingHorizontal: 8,
+            backgroundColor: BACKGROUNDS.DARKEST,
+            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopColor: BORDER_COLORS.PRIMARY,
+            borderBottomWidth: StyleSheet.hairlineWidth,
+            borderBottomColor: BORDER_COLORS.PRIMARY,
+          }}
+        >
+          <TextInput
+            ref={draftInputRef}
+            value={draftText}
+            onChangeText={setDraftText}
+            placeholder="Nhập text (tiếng Việt, 中文, …) — insert vào con trỏ"
+            placeholderTextColor="#8a8f98"
+            returnKeyType="send"
+            onSubmitEditing={sendDraft}
+            autoCorrect={false}
+            autoComplete="off"
+            style={{
+              flex: 1,
+              height: 38,
+              paddingHorizontal: 10,
+              backgroundColor: BACKGROUNDS.CARD,
+              borderColor: BORDER_COLORS.PRIMARY,
+              borderWidth: StyleSheet.hairlineWidth,
+              color: "#e8eaed",
+              fontSize: 15,
+            }}
+          />
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Insert text into terminal"
+            onPress={sendDraft}
+            style={{
+              height: 38,
+              paddingHorizontal: 12,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: ACCENT,
+              backgroundColor: ACCENT,
+            }}
+          >
+            <Send size={16} color={BACKGROUNDS.DARKEST} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel="Close text insert box"
+            onPress={closeDraftBox}
+            style={{
+              height: 38,
+              paddingHorizontal: 10,
+              alignItems: "center",
+              justifyContent: "center",
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: BORDER_COLORS.PRIMARY,
+              backgroundColor: BACKGROUNDS.CARD,
+            }}
+          >
+            <X size={16} color="#9aa0a8" />
+          </TouchableOpacity>
+        </View>
+      )}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -193,7 +358,7 @@ export default function KeyboardBar({
       >
         {hasPinnedKeys && (
           <>
-            {pinnedKeys.map((key, index) => renderKey(key, index))}
+            {renderRow(pinnedKeys, "pin")}
             <View
               className="mx-2 h-[30px] w-px"
               style={{ backgroundColor: BORDER_COLORS.PRIMARY }}
@@ -201,7 +366,7 @@ export default function KeyboardBar({
           </>
         )}
 
-        {keys.map((key, index) => renderKey(key, index))}
+        {renderRow(keys, "top")}
 
         {!hasPasteKey && (
           <>

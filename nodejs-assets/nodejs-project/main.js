@@ -473,11 +473,16 @@ function handleMessage(ws, raw) {
     }
 
     case "resize": {
-      if (s && s.conn && s.phase === "connected") {
+      if (s && s.shell && s.phase === "connected") {
         s.cols = (msg.data && msg.data.cols) || s.cols;
         s.rows = (msg.data && msg.data.rows) || s.rows;
         try {
-          s.conn.setWindow(s.rows, s.cols, 0, 0);
+          // NOTE: must be the CHANNEL's setWindow (sends
+          // SSH_MSG_CHANNEL_WINDOW_CHANGE -> sshd -> TIOCSWINSZ -> SIGWINCH).
+          // Client has no setWindow in ssh2 1.x — the old s.conn.setWindow
+          // call threw inside try/catch and the pty never resized, so TUIs
+          // (opencode) never redrew on keyboard show/hide.
+          s.shell.setWindow(s.rows, s.cols, 0, 0);
         } catch (_) {
           /* noop */
         }

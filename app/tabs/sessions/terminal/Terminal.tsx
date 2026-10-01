@@ -451,6 +451,25 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
   <div id="terminal"></div>
 
   <script>
+    // [termix-dbg] WebView console.log does not reach Android logcat, so
+    // mirror [termix] lines to React Native (shows up as ReactNativeJS).
+    (function () {
+      var origLog = console.log;
+      console.log = function () {
+        var msg = Array.prototype.join.call(arguments, " ");
+        if (msg.indexOf("[termix]") === 0) {
+          try {
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(
+                JSON.stringify({ type: "termixDbg", data: msg }),
+              );
+            }
+          } catch (e) {}
+        }
+        origLog.apply(console, arguments);
+      };
+    })();
+
     const screenWidth = ${width};
     const screenHeight = ${height};
 
@@ -524,6 +543,9 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
     // disabled outside the synchronous wheel dispatch below, so keyboard text
     // continues to use only the React Native input path.
     terminal.onData(function(data) {
+      try {
+        termixLog('onData', data.length + 'b ' + JSON.stringify(String(data).slice(0, 16)));
+      } catch (e) {}
       if (window.ReactNativeWebView) {
         window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'input', data: data }));
       }
@@ -657,6 +679,20 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       return false;
     }, { passive: false });
 
+    // [termix-dbg] Light tracing to logcat (chromium console) to diagnose
+    // scroll / input / resize issues on device.
+    function termixLog(tag, extra) {
+      try { console.log('[termix] ' + tag + (extra ? ' ' + extra : '')); } catch (e) {}
+    }
+    // True while a TUI (opencode & friends) has mouse tracking enabled and
+    // therefore owns every pointer gesture on the terminal surface.
+    function termixMouseActive() {
+      try {
+        var svc = terminal._core.coreMouseService || terminal._core._coreMouseService;
+        return !!svc && !!svc.areMouseEventsActive;
+      } catch (err) { return false; }
+    }
+
     let selectionEndTimeout = null;
     let isCurrentlySelecting = false;
     let lastInteractionTime = Date.now();
@@ -681,7 +717,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       }
 
       longPressTimeout = setTimeout(() => {
-        if (!hasMoved) {
+        if (!hasMoved && !termixMouseActive()) {
           if (!isCurrentlySelecting) {
             window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'selectionStart', data: {} }));
             isCurrentlySelecting = true;
@@ -783,6 +819,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
 
     function handleResize() {
       fitAddon.fit();
+      termixLog('fit', 'cols=' + terminal.cols + ' rows=' + terminal.rows);
       if (window.ReactNativeWebView) {
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'resize',
@@ -809,6 +846,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
 
       try {
         fitAddon.fit();
+        termixLog('viewport', 'px=' + px + ' cols=' + terminal.cols + ' rows=' + terminal.rows);
         if (window.ReactNativeWebView) {
           window.ReactNativeWebView.postMessage(JSON.stringify({
             type: 'resize',
@@ -947,6 +985,39 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           terminal.element.dispatchEvent(ev);
         });
       }
+
+      // SGR wheel reports arrive at the TUI as discrete ticks. TUIs
+      // (opencode) coalesce ticks that land in the same frame, so a burst of
+      // N reports from one fast swipe scrolled as if it were one tick.
+      // The queue is fed on EVERY touchmove (so it follows the finger in
+      // real time — finger moves, ticks flow; finger stops, ticks stop) and
+      // drained as fast as frames allow (~8ms ≈ 120 ticks/s): the TUI then
+      // scrolls continuously while the finger is in motion, and any leftover
+      // from a fling drains as a short momentum tail (Termius-like feel).
+      var wheelQueue = 0;
+      var wheelTimer = null;
+      function queueWheel(lines) {
+        wheelQueue += lines;
+        if (wheelTimer) return;
+        wheelTimer = setInterval(function() {
+          if (wheelQueue === 0) {
+            clearInterval(wheelTimer);
+            wheelTimer = null;
+            return;
+          }
+          var step = wheelQueue > 0 ? 1 : -1;
+          // Drain up to 3 lines per tick. A burst of separate SGR reports
+          // is handled fine by the TUI (verified on opencode), so at this
+          // drain rate the queue cannot build up during a steady drag and
+          // the scroll tracks the finger 1:1; only a fast fling leaves a
+          // short momentum tail.
+          var n = Math.min(Math.abs(wheelQueue), 3);
+          wheelQueue -= step * n;
+          for (var i = 0; i < n; i++) {
+            try { dispatchSyntheticWheel(step); } catch (e2) {}
+          }
+        }, 8);
+      }
       function dispatchSyntheticTap() {
         dispatchWithStdin(function() {
           terminal.element.dispatchEvent(new MouseEvent('mousedown', {
@@ -973,25 +1044,27 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           lastY = gestureStartY;
           swiping = false;
           pendingLines = 0;
+          termixLog('touchstart', 'mouse=' + (mouseActive() ? 1 : 0) + ' alt=' + (inAltBuffer() ? 1 : 0) + ' selecting=' + (typeof isCurrentlySelecting !== 'undefined' && isCurrentlySelecting ? 1 : 0));
         }
       }, { passive: true, capture: true });
       terminalElement.addEventListener('touchmove', function(e) {
-        if (scrollTouchY === null || e.touches.length !== 1) return;
-        // While the user is text-selecting, leave the gesture alone so xterm's
-        // selection drag can track the finger.
-        if (typeof isCurrentlySelecting !== 'undefined' && isCurrentlySelecting) {
-          return;
-        }
-        var x = e.touches[0].clientX;
-        var y = e.touches[0].clientY;
+        var t0 = e.touches && e.touches.length > 0 ? e.touches[0] : null;
+        if (!t0 || scrollTouchY === null) return;
+        var x = t0.clientX;
+        var y = t0.clientY;
         lastX = x;
         lastY = y;
 
         if (mouseActive()) {
+          // Mouse-tracked TUI owns the gesture. This branch must run BEFORE
+          // the selection guard: a 350ms finger pause before the swipe can
+          // stick isCurrentlySelecting on, which used to swallow every
+          // wheel event and killed TUI scrolling.
           if (!swiping) {
             var moved = Math.abs(x - gestureStartX) + Math.abs(y - gestureStartY);
             if (moved < SWIPE_THRESHOLD_PX) return; // still a tap/click
             swiping = true;
+            termixLog('swipe-start', Math.round(x) + ',' + Math.round(y));
           }
           e.preventDefault();
           var dyM = scrollTouchY - y;
@@ -1000,8 +1073,17 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           var wholeM = Math.trunc(pendingLines);
           if (wholeM !== 0) {
             pendingLines -= wholeM;
-            try { dispatchSyntheticWheel(wholeM); } catch (e2) {}
+            try {
+              termixLog('wheel', 'lines=' + wholeM + ' @' + Math.round(lastX) + ',' + Math.round(lastY));
+              queueWheel(wholeM);
+            } catch (e2) {}
           }
+          return;
+        }
+
+        // While the user is text-selecting, leave the gesture alone so xterm's
+        // selection drag can track the finger.
+        if (typeof isCurrentlySelecting !== 'undefined' && isCurrentlySelecting) {
           return;
         }
 
@@ -1025,6 +1107,7 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
         if (mouseActive() && !swiping && scrollTouchY !== null) {
           // Quick tap on a mouse-tracked TUI: forward the click the app
           // would otherwise never receive.
+          termixLog('tap', '@' + Math.round(lastX) + ',' + Math.round(lastY));
           try { dispatchSyntheticTap(); } catch (e2) {}
         }
         scrollTouchY = null;
@@ -1173,6 +1256,9 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
       if (h <= 0 || h === viewportHeightRef.current) {
         return;
       }
+      console.log(
+        "[termix] onLayout h=" + h + " (prev " + viewportHeightRef.current + ")",
+      );
       viewportHeightRef.current = h;
       // Debounce so mid-animation frames don't each trigger a pty resize.
       if (viewportDebounceTimerRef.current) {
@@ -1209,6 +1295,12 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           case "resize":
             terminalColsRef.current = message.data.cols;
             terminalRowsRef.current = message.data.rows;
+            console.log(
+              "[termix] resize->ws cols=" +
+                message.data.cols +
+                " rows=" +
+                message.data.rows,
+            );
             wsManagerRef.current?.sendResize(
               message.data.cols,
               message.data.rows,
@@ -1230,7 +1322,18 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           case "input":
             // Wheel/mouse input synthesized inside the WebView (xterm onData),
             // forwarded to the pty so TUI apps can scroll their context.
+            console.log(
+              "[termix] input->ws " +
+                String(message.data).length +
+                "b " +
+                JSON.stringify(String(message.data).slice(0, 16)),
+            );
             wsManagerRef.current?.sendInput(message.data);
+            break;
+
+          case "termixDbg":
+            // Mirrored WebView console lines (see [termix-dbg] in the HTML).
+            console.log(message.data);
             break;
         }
       } catch (error) {
@@ -1300,6 +1403,11 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           }
         },
         onData: (data) => {
+          console.log(
+            "[termix] data-in " +
+              (data && data.length ? data.length : String(data).length) +
+              "b",
+          );
           pendingDataRef.current.push(data);
           if (!dataFlushTimerRef.current) {
             dataFlushTimerRef.current = setTimeout(() => {

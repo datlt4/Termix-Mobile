@@ -3,6 +3,7 @@ package expo.modules.terminalimeinput
 import android.content.Context
 import android.graphics.Color
 import android.text.InputType
+import android.util.Log
 import android.view.KeyEvent
 import android.view.View.OnFocusChangeListener
 import android.view.ViewGroup
@@ -51,6 +52,10 @@ private class TerminalImeEditText(
   }
 
   override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+    Log.d(
+      "TermixIme",
+      "onKeyDown keyCode=$keyCode action=${event.action} composition=${owner.isCompositionActive()}",
+    )
     val mappedKey = mapSpecialKey(keyCode)
     if (mappedKey == null) {
       if (owner.isCompositionActive()) {
@@ -193,22 +198,29 @@ private class TerminalImeEditText(
     target: InputConnection,
   ) : InputConnectionWrapper(target, true) {
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+      Log.d("TermixIme", "setComposingText \"$text\"")
       editText.onCompositionTextChanged(true)
       return super.setComposingText(text, newCursorPosition)
     }
 
     override fun setComposingRegion(start: Int, end: Int): Boolean {
+      Log.d("TermixIme", "setComposingRegion $start..$end")
       editText.onCompositionTextChanged(start != end)
       return super.setComposingRegion(start, end)
     }
 
     override fun finishComposingText(): Boolean {
+      Log.d("TermixIme", "finishComposingText")
       editText.onCompositionTextChanged(false)
       return super.finishComposingText()
     }
 
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
       val committed = text?.toString().orEmpty()
+      Log.d(
+        "TermixIme",
+        "commitText \"$committed\" editTextEmpty=${editText.text.isNullOrEmpty()}",
+      )
       if (committed == "\n" && editText.onEnterFromIme()) {
         return true
       }
@@ -290,6 +302,7 @@ class TerminalImeInputView(
   }
 
   internal fun emitCommittedText(text: String) {
+    Log.d("TermixIme", "emitCommittedText \"$text\"")
     onCommitText(mapOf("text" to text))
   }
 

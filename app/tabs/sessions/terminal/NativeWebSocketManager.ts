@@ -190,6 +190,12 @@ export class NativeWebSocketManager {
 
   sendInput(data: string): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log(
+        "[termix] ws.sendInput " +
+          data.length +
+          "b " +
+          JSON.stringify(String(data).slice(0, 16)),
+      );
       try {
         this.ws.send(JSON.stringify({ type: "input", data }));
       } catch (e) {}
@@ -200,6 +206,7 @@ export class NativeWebSocketManager {
     this.cols = cols;
     this.rows = rows;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log("[termix] ws.sendResize cols=" + cols + " rows=" + rows);
       try {
         this.ws.send(JSON.stringify({ type: "resize", data: { cols, rows } }));
       } catch (e) {}
