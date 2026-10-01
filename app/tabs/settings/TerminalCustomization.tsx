@@ -9,7 +9,7 @@ import { TERMINAL_FONTS } from "@/constants/terminal-themes";
 import { Text, Button, Input, Dialog } from "@/app/components/ui";
 import { useThemeColor } from "@/app/contexts/ThemeContext";
 
-const FONT_SIZE_OPTIONS = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24];
+const FONT_SIZE_OPTIONS = [5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24];
 
 const LETTER_SPACING_OPTIONS = [
   { label: "Default", value: 0 },
