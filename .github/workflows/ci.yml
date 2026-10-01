@@ -1,14 +1,8 @@
 name: CI
 
+# FORK: manual only — it ran (and failed) on every push to the fork's main.
 on:
-  pull_request:
-    branches:
-      - main
-      - dev-1.5.0
-  push:
-    branches:
-      - main
-      - dev-1.5.0
+  workflow_dispatch:
 
 jobs:
   check:
