@@ -66,10 +66,25 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER="" | tail -n 200
-          test -d ../release/Termix.xcarchive/Products/Applications/Termix.app
+            PROVISIONING_PROFILE_SPECIFIER="" > ../xcodebuild.log 2>&1 || true
+          tail -n 60 ../xcodebuild.log
+          if [ ! -d ../release/Termix.xcarchive/Products/Applications/Termix.app ]; then
+            # Surface the compiler errors as (publicly readable) annotations.
+            grep -E "error:|\*\* ARCHIVE FAILED|fatal error" ../xcodebuild.log | sort -u | head -n 10 |
+              while IFS= read -r line; do echo "::error::${line:0:900}"; done
+            exit 1
+          fi
         env:
           NODEJS_MOBILE_BUILD_NATIVE_MODULES: "0"
+
+      - name: Publish build log on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete ios-dev-log --yes --cleanup-tag || true
+          gh release create ios-dev-log xcodebuild.log --prerelease --target "$GITHUB_SHA" \
+            --title "iOS build log (failed)" --notes "xcodebuild log of $GITHUB_SHA"
 
       - name: Package IPA
         run: |
