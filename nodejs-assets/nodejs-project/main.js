@@ -177,6 +177,12 @@ function openSSH(s) {
   log(s, "info", `Connecting to ${h.ip}:${h.port} as ${h.username}…`);
 
   conn.on("ready", () => {
+    // Interactive traffic is many tiny writes (keystrokes, one SGR wheel
+    // report per scroll tick). ssh2 leaves Nagle on, so each write after the
+    // first waited for the server's (delayed) ACK — tens of ms per scroll
+    // tick. OpenSSH and native clients disable Nagle for interactive
+    // sessions.
+    conn.setNoDelay(true);
     startShell(s);
   });
 
