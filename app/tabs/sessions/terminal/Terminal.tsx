@@ -612,7 +612,59 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
     // the dataReceived notification to avoid spurious state changes.
     let connectionEpoch = 0;
     let notifiedEpoch = -1;
+    // Synchronized output (DECSET 2026). TUIs such as opencode wrap every
+    // redraw in ESC[?2026h ... ESC[?2026l so the terminal shows the frame
+    // only once it is complete. The bundled xterm 5 ignores the mode, and
+    // pty data reaches the WebView in ~16ms batches, so each scroll tick was
+    // painted in several half-drawn steps (torn, jumpy scrolling). Hold an
+    // open frame until its end marker arrives and write it in one go; a
+    // frame that never closes is flushed after SYNC_TIMEOUT_MS, as real
+    // terminals do.
+    const SYNC_BEGIN = '\\x1b[?2026h';
+    const SYNC_END = '\\x1b[?2026l';
+    const SYNC_TIMEOUT_MS = 150;
+    let syncPending = '';
+    let syncTimer = null;
+    function flushSyncPending() {
+      if (syncTimer) {
+        clearTimeout(syncTimer);
+        syncTimer = null;
+      }
+      if (syncPending) {
+        const data = syncPending;
+        syncPending = '';
+        writeNow(data);
+      }
+    }
+    // Length of a trailing partial ESC[?2026h (marker split across batches).
+    function partialBeginSuffix(text) {
+      for (let n = Math.min(SYNC_BEGIN.length - 1, text.length); n > 0; n--) {
+        if (SYNC_BEGIN.startsWith(text.slice(text.length - n))) return n;
+      }
+      return 0;
+    }
     window.writeToTerminal = function(data) {
+      syncPending += data;
+      const lastBegin = syncPending.lastIndexOf(SYNC_BEGIN);
+      const lastEnd = syncPending.lastIndexOf(SYNC_END);
+      let holdFrom = -1;
+      if (lastBegin > lastEnd) {
+        holdFrom = lastBegin;
+      } else {
+        const partial = partialBeginSuffix(syncPending);
+        if (partial) holdFrom = syncPending.length - partial;
+      }
+      if (holdFrom < 0) {
+        flushSyncPending();
+        return;
+      }
+      const ready = syncPending.slice(0, holdFrom);
+      syncPending = syncPending.slice(holdFrom);
+      if (ready) writeNow(ready);
+      if (!syncTimer) syncTimer = setTimeout(flushSyncPending, SYNC_TIMEOUT_MS);
+    };
+
+    function writeNow(data) {
       const shouldStickToBottom = getIsScrolledToBottom();
       const capturedEpoch = connectionEpoch;
       try {
@@ -629,10 +681,16 @@ const TerminalComponent = forwardRef<TerminalHandle, TerminalProps>(
           scheduleScrollStateUpdate();
         });
       } catch(e) {}
-    };
+    }
 
     window.notifyConnected = function(fromBackground, isReattach) {
       connectionEpoch += 1;
+      // A half-received frame belongs to the previous connection.
+      if (syncTimer) {
+        clearTimeout(syncTimer);
+        syncTimer = null;
+      }
+      syncPending = '';
       terminal.clear();
       if (isReattach) {
         terminal.write('\\x1b[2J\\x1b[H\\x1b[?25h');
