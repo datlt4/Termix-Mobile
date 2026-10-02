@@ -924,6 +924,11 @@ export default function Sessions() {
               onDirectInputFocus={() => {
                 callImeInput(hiddenInputRef, "focus");
               }}
+              // Typing in the draft box brings the system keyboard up even
+              // when the user had hidden it; with the flag still set the bar
+              // stayed pinned to the bottom, under the keyboard (iOS, where
+              // the window does not resize).
+              onDraftInputFocus={() => setKeyboardIntentionallyHidden(false)}
             />
           </View>
         )}

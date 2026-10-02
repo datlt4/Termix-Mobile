@@ -38,6 +38,9 @@ interface KeyboardBarProps {
   /** Called when the draft-text box closes so the hidden terminal input can
    *  take focus back (direct typing resumes). */
   onDirectInputFocus?: () => void;
+  /** The draft box's text field took focus (the system keyboard is coming
+   *  up even if the user had hidden it), so the bar must sit above it. */
+  onDraftInputFocus?: () => void;
 }
 
 export default function KeyboardBar({
@@ -49,6 +52,7 @@ export default function KeyboardBar({
   onOpenSnippets,
   onDraftBoxChange,
   onDirectInputFocus,
+  onDraftInputFocus,
 }: KeyboardBarProps) {
   const { config } = useKeyboardCustomization();
   const { isLandscape } = useOrientation();
@@ -302,6 +306,7 @@ export default function KeyboardBar({
         >
           <TextInput
             ref={draftInputRef}
+            onFocus={onDraftInputFocus}
             value={draftText}
             onChangeText={setDraftText}
             placeholder="Nhập text (tiếng Việt, 中文, …) — insert vào con trỏ"
