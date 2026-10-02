@@ -30,8 +30,20 @@ exec >>"$LOG" 2>&1
 echo "=== $(date '+%F %T') start (force=$FORCE)"
 
 # --- device ---------------------------------------------------------------
-DEV_LINE=$(xcrun devicectl list devices 2>/dev/null | grep -iE "available|connected" | grep -i "iPhone" | head -1)
-DEVICE_ID=$(echo "$DEV_LINE" | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' | head -1)
+find_device() {
+  xcrun devicectl list devices 2>/dev/null | grep -iE "available|connected" | grep -viE "unavailable" |
+    grep -i "iPhone" | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' | head -1
+}
+DEVICE_ID=$(find_device)
+if [[ -z "$DEVICE_ID" ]]; then
+  # Over Wi-Fi a paired iPhone stays "unavailable" until something connects
+  # to it; poke each known iPhone once, then look again.
+  for id in $(xcrun devicectl list devices 2>/dev/null | grep -i "iPhone" |
+      grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}'); do
+    xcrun devicectl device info details --device "$id" --timeout 30 >/dev/null 2>&1
+  done
+  DEVICE_ID=$(find_device)
+fi
 if [[ -z "$DEVICE_ID" ]]; then echo "no iPhone reachable (USB or network); skip"; exit 0; fi
 echo "device $DEVICE_ID"
 
