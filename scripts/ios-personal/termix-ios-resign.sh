@@ -35,15 +35,18 @@ find_device() {
     grep -i "iPhone" | grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}' | head -1
 }
 DEVICE_ID=$(find_device)
-if [[ -z "$DEVICE_ID" ]]; then
-  # Over Wi-Fi a paired iPhone stays "unavailable" until something connects
-  # to it; poke each known iPhone once, then look again.
+# Over Wi-Fi a paired iPhone stays "unavailable" until something connects
+# to it, and opening the tunnel often takes a few attempts (seen: 3rd try).
+attempt=0
+while [[ -z "$DEVICE_ID" && $attempt -lt 5 ]]; do
+  attempt=$((attempt + 1))
   for id in $(xcrun devicectl list devices 2>/dev/null | grep -i "iPhone" |
       grep -oE '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}'); do
-    xcrun devicectl device info details --device "$id" --timeout 30 >/dev/null 2>&1
+    xcrun devicectl device info details --device "$id" --timeout 40 >/dev/null 2>&1
   done
   DEVICE_ID=$(find_device)
-fi
+  [[ -z "$DEVICE_ID" ]] && sleep 5
+done
 if [[ -z "$DEVICE_ID" ]]; then echo "no iPhone reachable (USB or network); skip"; exit 0; fi
 echo "device $DEVICE_ID"
 
