@@ -853,6 +853,7 @@ function localHostToSSHHost(h: LocalHost): SSHHost {
   return {
     id: h.id,
     syncId: null,
+    serverId: h.serverId ?? null,
     connectionType: "ssh",
     name: h.name,
     ip: h.ip,
@@ -869,7 +870,9 @@ function localHostToSSHHost(h: LocalHost): SSHHost {
     forceKeyboardInteractive: false,
     enableTerminal: true,
     enableTunnel: false,
-    enableFileManager: false,
+    // Was hard-coded false, so enabling the file manager on the phone never
+    // stuck (the flag was not even stored) and the server's value was lost.
+    enableFileManager: h.enableFileManager ?? true,
     defaultPath: h.defaultPath || "/",
     tunnelConnections: [],
     jumpHosts: [],
@@ -906,6 +909,7 @@ function sshHostDataToLocalHost(
     tags: d.tags || [],
     pin: Boolean(d.pin),
     defaultPath: d.defaultPath || "/",
+    enableFileManager: Boolean(d.enableFileManager),
   };
 }
 
@@ -985,8 +989,16 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
       const nextKey = existing.key || serverKey;
       const nextKeyPassword = existing.keyPassword ?? sh.keyPassword ?? null;
       const nextKeyType = existing.keyType ?? sh.keyType ?? null;
+      // A value saved on the device wins; hosts that never stored the flag
+      // take the server's.
+      const nextFileManager =
+        existing.enableFileManager ??
+        (typeof sh.enableFileManager === "boolean"
+          ? sh.enableFileManager
+          : undefined);
       if (
         existing.name !== mergedName ||
+        nextFileManager !== existing.enableFileManager ||
         existing.serverId !== serverId ||
         nextPassword !== (existing.password ?? null) ||
         nextKey !== (existing.key ?? null) ||
@@ -1001,6 +1013,7 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
           key: nextKey ?? null,
           keyPassword: nextKeyPassword,
           keyType: nextKeyType,
+          enableFileManager: nextFileManager,
           updatedAt: now,
         });
         changed = true;
@@ -1028,6 +1041,8 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
         folder: sh.folder || "",
         tags: sh.tags || [],
         pin: Boolean(sh.pin),
+        enableFileManager: sh.enableFileManager !== false,
+        defaultPath: sh.defaultPath || "/",
         serverId,
         createdAt: now,
         updatedAt: now,
@@ -1075,8 +1090,8 @@ async function pushLocalHostToServer(host: LocalHost): Promise<void> {
     enableSsh: true,
     enableTerminal: true,
     enableTunnel: false,
-    enableFileManager: false,
-    defaultPath: "",
+    enableFileManager: host.enableFileManager !== false,
+    defaultPath: host.defaultPath || "/",
     jumpHosts: [],
   };
 

@@ -188,7 +188,11 @@ export const FileManager = forwardRef<FileManagerHandle, FileManagerProps>(
           overrides: SessionAuthOverrides,
         ) =>
           connectSSH(sid, {
-            hostId: h.id,
+            // The server resolves hostId against its own hosts and refuses a
+            // mismatch. In standalone mode h.id is the device's id: send the
+            // server's id when the host is synced, else none (the server
+            // then uses the address and credentials below as given).
+            hostId: h.serverId === undefined ? h.id : (h.serverId ?? undefined),
             ip: h.ip,
             port: h.port,
             username: h.username,

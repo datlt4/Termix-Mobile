@@ -16,6 +16,9 @@ export interface SSHHost {
   // Names the host on both sides of a sync pair. Numeric ids can drift between
   // a device and its sync server, so connect calls pass this when present.
   syncId?: string | null;
+  /** FORK (standalone mode): id of this host on the linked server; null for
+   *  a device-only host, undefined when hosts come from the server itself. */
+  serverId?: number | null;
   connectionType?: "ssh" | "rdp" | "vnc" | "telnet" | string;
   name: string;
   ip: string;

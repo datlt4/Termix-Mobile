@@ -23,6 +23,8 @@ export interface LocalHost {
   tags?: string[];
   pin?: boolean;
   defaultPath?: string;
+  /** Unset on hosts saved before the flag was stored: follow the server. */
+  enableFileManager?: boolean;
   /** Id of the matching host on the linked sync server (when pushed/merged). */
   serverId?: number;
   createdAt?: string;
