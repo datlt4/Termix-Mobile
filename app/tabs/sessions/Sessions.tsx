@@ -972,7 +972,6 @@ export default function Sessions() {
           hiddenInputRef={hiddenInputRef}
           onHideKeyboard={() => setKeyboardIntentionallyHidden(true)}
           onShowKeyboard={() => setKeyboardIntentionallyHidden(false)}
-          keyboardIntentionallyHiddenRef={keyboardIntentionallyHiddenRef}
           activeSessionType={activeSession?.type}
           onShowConnections={() => {
             setKeyboardIntentionallyHidden(true);

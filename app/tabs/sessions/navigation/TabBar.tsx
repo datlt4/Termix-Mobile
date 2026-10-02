@@ -11,10 +11,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   X,
   ArrowLeft,
-  Plus,
-  Minus,
-  ChevronDown,
-  ChevronUp,
+  Keyboard as KeyboardIcon,
   SquareTerminal,
   Activity,
   Folder,
@@ -28,6 +25,7 @@ import {
   TerminalSession,
 } from "@/app/contexts/TerminalSessionsContext";
 import { useRouter } from "expo-router";
+import { useKeyboard } from "@/app/contexts/KeyboardContext";
 import { useOrientation } from "@/app/utils/orientation";
 import { getTabBarHeight, getButtonSize } from "@/app/utils/responsive";
 import {
@@ -70,7 +68,6 @@ interface TabBarProps {
   hiddenInputRef: React.RefObject<TerminalImeInputHandle | null>;
   onHideKeyboard?: () => void;
   onShowKeyboard?: () => void;
-  keyboardIntentionallyHiddenRef: React.MutableRefObject<boolean>;
   activeSessionType?: SessionType;
   onShowConnections?: () => void;
   hasBackgroundSessions?: boolean;
@@ -86,7 +83,6 @@ export default function TabBar({
   hiddenInputRef,
   onHideKeyboard,
   onShowKeyboard,
-  keyboardIntentionallyHiddenRef,
   activeSessionType,
   onShowConnections,
 }: TabBarProps) {
@@ -94,13 +90,18 @@ export default function TabBar({
   const { isLandscape } = useOrientation();
   const insets = useSafeAreaInsets();
 
+  const { isKeyboardVisible } = useKeyboard();
   const tabBarHeight = getTabBarHeight(isLandscape);
   const buttonSize = getButtonSize(isLandscape);
 
   const needsBottomPadding = activeSessionType !== "terminal";
 
+  // Toggle on what is actually on screen. Deciding from the "intentionally
+  // hidden" flag needed two taps whenever the keyboard had gone away some
+  // other way (swiped down, draft box closed, ...): the first tap "hid" an
+  // already hidden keyboard.
   const handleToggleSystemKeyboard = () => {
-    if (keyboardIntentionallyHiddenRef.current) {
+    if (!isKeyboardVisible) {
       onShowKeyboard?.();
       setTimeout(() => {
         callImeInput(hiddenInputRef, "focus");
@@ -142,6 +143,30 @@ export default function TabBar({
             marginTop: 4,
           }}
         >
+          {/* Back to hosts button */}
+          <TouchableOpacity
+            onPress={() => router.navigate("/hosts" as any)}
+            focusable={false}
+            className="items-center justify-center"
+            activeOpacity={0.7}
+            style={{
+              width: buttonSize,
+              height: buttonSize,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: BORDER_COLORS.BUTTON,
+              backgroundColor: BACKGROUNDS.BUTTON,
+              borderRadius: RADIUS.BUTTON,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 4,
+              elevation: 2,
+              marginRight: isLandscape ? 6 : 8,
+            }}
+          >
+            <ArrowLeft size={isLandscape ? 18 : 20} color="#ffffff" />
+          </TouchableOpacity>
+
           {/* Connections panel button */}
           <View
             style={{ position: "relative", marginRight: isLandscape ? 6 : 8 }}
@@ -168,30 +193,6 @@ export default function TabBar({
               <Layers size={isLandscape ? 16 : 18} color="#ffffff" />
             </TouchableOpacity>
           </View>
-
-          {/* Back to hosts button */}
-          <TouchableOpacity
-            onPress={() => router.navigate("/hosts" as any)}
-            focusable={false}
-            className="items-center justify-center"
-            activeOpacity={0.7}
-            style={{
-              width: buttonSize,
-              height: buttonSize,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: BORDER_COLORS.BUTTON,
-              backgroundColor: BACKGROUNDS.BUTTON,
-              borderRadius: RADIUS.BUTTON,
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.1,
-              shadowRadius: 4,
-              elevation: 2,
-              marginRight: isLandscape ? 6 : 8,
-            }}
-          >
-            <ArrowLeft size={isLandscape ? 18 : 20} color="#ffffff" />
-          </TouchableOpacity>
 
           <View style={{ flex: 1, justifyContent: "center" }}>
             <ScrollView
@@ -301,14 +302,22 @@ export default function TabBar({
             <TouchableOpacity
               onPress={handleToggleSystemKeyboard}
               focusable={false}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isKeyboardVisible ? "Hide keyboard" : "Show keyboard"
+              }
               className="items-center justify-center"
               activeOpacity={0.7}
               style={{
                 width: buttonSize,
                 height: buttonSize,
                 borderWidth: StyleSheet.hairlineWidth,
-                borderColor: BORDER_COLORS.BUTTON,
-                backgroundColor: BACKGROUNDS.BUTTON,
+                borderColor: isKeyboardVisible
+                  ? BORDER_COLORS.ACTIVE
+                  : BORDER_COLORS.BUTTON,
+                backgroundColor: isKeyboardVisible
+                  ? `${ACCENT}18`
+                  : BACKGROUNDS.BUTTON,
                 borderRadius: RADIUS.BUTTON,
                 shadowColor: "#000",
                 shadowOffset: { width: 0, height: 2 },
@@ -318,11 +327,10 @@ export default function TabBar({
                 marginLeft: isLandscape ? 6 : 8,
               }}
             >
-              {keyboardIntentionallyHiddenRef.current ? (
-                <ChevronUp size={isLandscape ? 18 : 20} color="#ffffff" />
-              ) : (
-                <ChevronDown size={isLandscape ? 18 : 20} color="#ffffff" />
-              )}
+              <KeyboardIcon
+                size={isLandscape ? 18 : 20}
+                color={isKeyboardVisible ? ACCENT : "#ffffff"}
+              />
             </TouchableOpacity>
           )}
 
@@ -330,6 +338,8 @@ export default function TabBar({
             <TouchableOpacity
               onPress={() => onToggleKeyboard?.()}
               focusable={false}
+              accessibilityRole="button"
+              accessibilityLabel="Function keys"
               className="items-center justify-center"
               activeOpacity={0.7}
               style={{
@@ -347,11 +357,15 @@ export default function TabBar({
                 marginLeft: isLandscape ? 6 : 8,
               }}
             >
-              {isCustomKeyboardVisible ? (
-                <Minus size={isLandscape ? 18 : 20} color={ACCENT} />
-              ) : (
-                <Plus size={isLandscape ? 18 : 20} color="#ffffff" />
-              )}
+              <Text
+                style={{
+                  fontSize: isLandscape ? 13 : 14,
+                  fontWeight: "700",
+                  color: isCustomKeyboardVisible ? ACCENT : "#ffffff",
+                }}
+              >
+                Fn
+              </Text>
             </TouchableOpacity>
           )}
         </View>
