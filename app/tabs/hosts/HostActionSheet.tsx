@@ -3,7 +3,6 @@ import * as Clipboard from "expo-clipboard";
 import {
   Terminal,
   FolderSearch,
-  Server,
   Network,
   Box,
   Monitor,
@@ -25,18 +24,7 @@ import type {
 import { BottomSheet, SheetRow, Text } from "@/app/components/ui";
 import { useThemeColor } from "@/app/contexts/ThemeContext";
 import { toast } from "@/app/utils/toast";
-import { StatsConfig, DEFAULT_STATS_CONFIG } from "@/constants/stats-config";
 import { wakeHost } from "@/app/main-axios";
-
-function parseStatsConfig(host: SSHHost): StatsConfig {
-  try {
-    return host.statsConfig
-      ? JSON.parse(host.statsConfig)
-      : DEFAULT_STATS_CONFIG;
-  } catch {
-    return DEFAULT_STATS_CONFIG;
-  }
-}
 
 /**
  * Whether the host speaks SSH. The redesigned multi-protocol backend sets
@@ -102,7 +90,6 @@ export function HostActionSheet({
   };
 
   const ssh = isSshHost(host);
-  const metricsEnabled = ssh && parseStatsConfig(host).metricsEnabled !== false;
 
   // SSH-gated connection actions (mirrors the web's getSshActions).
   const sshActions = [
@@ -124,9 +111,6 @@ export function HostActionSheet({
     host.tunnelConnections &&
     host.tunnelConnections.length > 0
       ? { type: "tunnel" as SessionType, icon: Network, label: "Tunnels" }
-      : null,
-    metricsEnabled
-      ? { type: "stats" as SessionType, icon: Server, label: "Server Stats" }
       : null,
   ].filter(Boolean) as {
     type: SessionType;

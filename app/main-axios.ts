@@ -332,9 +332,9 @@ export function getDockerConsoleWebSocketUrl(token: string): string {
     scheme.toLowerCase() === "https" ? "wss" : "ws",
   );
   const params = new URLSearchParams({ token });
-  // When a real server URL is configured, nginx routes /docker/console/ → port 30009.
+  // FORK: the 2.9 server serves plugin sockets at /plugin-ws/<plugin>/<path>.
   // In local dev (no configuredServerUrl), getRootBase already includes :30009.
-  const path = configuredServerUrl ? "/docker/console/" : "/";
+  const path = configuredServerUrl ? "/plugin-ws/docker/console" : "/";
   return `${websocketBase}${path}?${params.toString()}`;
 }
 
@@ -873,6 +873,7 @@ function localHostToSSHHost(h: LocalHost): SSHHost {
     // Was hard-coded false, so enabling the file manager on the phone never
     // stuck (the flag was not even stored) and the server's value was lost.
     enableFileManager: h.enableFileManager ?? true,
+    enableDocker: h.enableDocker ?? false,
     defaultPath: h.defaultPath || "/",
     tunnelConnections: [],
     jumpHosts: [],
@@ -910,6 +911,7 @@ function sshHostDataToLocalHost(
     pin: Boolean(d.pin),
     defaultPath: d.defaultPath || "/",
     enableFileManager: Boolean(d.enableFileManager),
+    enableDocker: Boolean(d.enableDocker),
   };
 }
 
@@ -996,9 +998,13 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
         (typeof sh.enableFileManager === "boolean"
           ? sh.enableFileManager
           : undefined);
+      const nextDocker =
+        existing.enableDocker ??
+        (typeof sh.enableDocker === "boolean" ? sh.enableDocker : undefined);
       if (
         existing.name !== mergedName ||
         nextFileManager !== existing.enableFileManager ||
+        nextDocker !== existing.enableDocker ||
         existing.serverId !== serverId ||
         nextPassword !== (existing.password ?? null) ||
         nextKey !== (existing.key ?? null) ||
@@ -1014,6 +1020,7 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
           keyPassword: nextKeyPassword,
           keyType: nextKeyType,
           enableFileManager: nextFileManager,
+          enableDocker: nextDocker,
           updatedAt: now,
         });
         changed = true;
@@ -1042,6 +1049,7 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
         tags: sh.tags || [],
         pin: Boolean(sh.pin),
         enableFileManager: sh.enableFileManager !== false,
+        enableDocker: sh.enableDocker === true,
         defaultPath: sh.defaultPath || "/",
         serverId,
         createdAt: now,
@@ -1091,6 +1099,7 @@ async function pushLocalHostToServer(host: LocalHost): Promise<void> {
     enableTerminal: true,
     enableTunnel: false,
     enableFileManager: host.enableFileManager !== false,
+    enableDocker: host.enableDocker === true,
     defaultPath: host.defaultPath || "/",
     jumpHosts: [],
   };
@@ -1689,7 +1698,7 @@ export async function connectSSH(
   },
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/connect", {
+    const response = await fileManagerApi.post("/connect", {
       sessionId,
       ...config,
     });
@@ -1705,7 +1714,7 @@ export async function verifySSHWarpgate(
   securityKey?: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/connect-warpgate", {
+    const response = await fileManagerApi.post("/connect-warpgate", {
       sessionId,
       warpgateUrl,
       securityKey,
@@ -1718,7 +1727,7 @@ export async function verifySSHWarpgate(
 
 export async function disconnectSSH(sessionId: string): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/disconnect", {
+    const response = await fileManagerApi.post("/disconnect", {
       sessionId,
     });
     return response.data;
@@ -1731,7 +1740,7 @@ export async function getSSHStatus(
   sessionId: string,
 ): Promise<{ connected: boolean }> {
   try {
-    const response = await fileManagerApi.get("/ssh/status", {
+    const response = await fileManagerApi.get("/status", {
       params: { sessionId },
     });
     return response.data;
@@ -1745,7 +1754,7 @@ export async function verifySSHTOTP(
   totpCode: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/connect-totp", {
+    const response = await fileManagerApi.post("/connect-totp", {
       sessionId,
       totpCode,
     });
@@ -1757,7 +1766,7 @@ export async function verifySSHTOTP(
 
 export async function keepSSHAlive(sessionId: string): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/keepalive", {
+    const response = await fileManagerApi.post("/keepalive", {
       sessionId,
     });
     return response.data;
@@ -1771,7 +1780,7 @@ export async function listSSHFiles(
   path: string,
 ): Promise<{ files: any[]; path: string }> {
   try {
-    const response = await fileManagerApi.get("/ssh/listFiles", {
+    const response = await fileManagerApi.get("/listFiles", {
       params: { sessionId, path },
     });
     return response.data || { files: [], path };
@@ -1786,7 +1795,7 @@ export async function identifySSHSymlink(
   path: string,
 ): Promise<{ path: string; target: string; type: "directory" | "file" }> {
   try {
-    const response = await fileManagerApi.get("/ssh/identifySymlink", {
+    const response = await fileManagerApi.get("/identifySymlink", {
       params: { sessionId, path },
     });
     return response.data;
@@ -1800,7 +1809,7 @@ export async function readSSHFile(
   path: string,
 ): Promise<{ content: string; path: string }> {
   try {
-    const response = await fileManagerApi.get("/ssh/readFile", {
+    const response = await fileManagerApi.get("/readFile", {
       params: { sessionId, path },
     });
     return response.data;
@@ -1823,7 +1832,7 @@ export async function writeSSHFile(
   userId?: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/writeFile", {
+    const response = await fileManagerApi.post("/writeFile", {
       sessionId,
       path,
       content,
@@ -1854,7 +1863,7 @@ export async function uploadSSHFile(
   userId?: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/uploadFile", {
+    const response = await fileManagerApi.post("/uploadFile", {
       sessionId,
       path,
       fileName,
@@ -1877,7 +1886,7 @@ export async function createSSHFile(
   userId?: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/createFile", {
+    const response = await fileManagerApi.post("/createFile", {
       sessionId,
       path,
       fileName,
@@ -1899,7 +1908,7 @@ export async function createSSHFolder(
   userId?: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/createFolder", {
+    const response = await fileManagerApi.post("/createFolder", {
       sessionId,
       path,
       folderName,
@@ -1920,7 +1929,7 @@ export async function deleteSSHItem(
   userId?: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.delete("/ssh/deleteItem", {
+    const response = await fileManagerApi.delete("/deleteItem", {
       data: {
         sessionId,
         path,
@@ -1948,7 +1957,7 @@ export async function listSSHTrash(
   sessionId: string,
 ): Promise<{ items: TrashItem[]; retentionDays: number }> {
   try {
-    const response = await fileManagerApi.get("/ssh/trash", {
+    const response = await fileManagerApi.get("/trash", {
       params: { sessionId },
     });
     return {
@@ -1993,7 +2002,7 @@ export async function deleteSSHTrashItem(
 
 export async function emptySSHTrash(sessionId: string): Promise<any> {
   try {
-    const response = await fileManagerApi.delete("/ssh/trash", {
+    const response = await fileManagerApi.delete("/trash", {
       data: { sessionId },
     });
     return response.data;
@@ -2011,7 +2020,7 @@ export async function renameSSHItem(
   userId?: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.put("/ssh/renameItem", {
+    const response = await fileManagerApi.put("/renameItem", {
       sessionId,
       oldPath,
       newName,
@@ -2032,7 +2041,7 @@ export async function downloadSSHFile(
   userId?: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/downloadFile", {
+    const response = await fileManagerApi.post("/downloadFile", {
       sessionId,
       path: filePath,
       hostId,
@@ -2053,7 +2062,7 @@ export async function copySSHItem(
 ): Promise<any> {
   try {
     const response = await fileManagerApi.post(
-      "/ssh/copyItem",
+      "/copyItem",
       {
         sessionId,
         sourcePath,
@@ -2081,7 +2090,7 @@ export async function moveSSHItem(
 ): Promise<any> {
   try {
     const response = await fileManagerApi.put(
-      "/ssh/moveItem",
+      "/moveItem",
       {
         sessionId,
         oldPath,
@@ -2117,7 +2126,7 @@ export async function changeSSHPermissions(
       userId,
     });
 
-    const response = await fileManagerApi.post("/ssh/changePermissions", {
+    const response = await fileManagerApi.post("/changePermissions", {
       sessionId,
       path,
       permissions,
@@ -2162,7 +2171,7 @@ export async function extractSSHArchive(
       userId,
     });
 
-    const response = await fileManagerApi.post("/ssh/extractArchive", {
+    const response = await fileManagerApi.post("/extractArchive", {
       sessionId,
       archivePath,
       extractPath,
@@ -2209,7 +2218,7 @@ export async function compressSSHFiles(
       userId,
     });
 
-    const response = await fileManagerApi.post("/ssh/compressFiles", {
+    const response = await fileManagerApi.post("/compressFiles", {
       sessionId,
       paths,
       archiveName,
@@ -2244,7 +2253,7 @@ export async function resolveSSHPath(
   path: string,
 ): Promise<{ resolved: string }> {
   try {
-    const response = await fileManagerApi.get("/ssh/resolvePath", {
+    const response = await fileManagerApi.get("/resolvePath", {
       params: { sessionId, path },
     });
     return response.data;
@@ -2260,7 +2269,7 @@ export async function executeSSHFile(
   userId?: string,
 ): Promise<any> {
   try {
-    const response = await fileManagerApi.post("/ssh/executeFile", {
+    const response = await fileManagerApi.post("/executeFile", {
       sessionId,
       path,
       hostId,
@@ -4314,12 +4323,12 @@ export async function getActiveSessions(): Promise<ActiveSessionInfo[]> {
 export type { DockerContainer, DockerContainerStats } from "../types/index";
 
 /**
- * Docker REST API base. nginx routes /docker/* → port 30007 from the server
- * root (no /ssh prefix). In local dev without a configured server URL,
- * getRootBase falls back to localhost:30007.
+ * Docker REST API base. FORK: the 2.9 server serves the docker plugin under
+ * /plugin-api/docker (the old /docker/* root routes are gone — they now hit
+ * the web app and answer 405).
  */
 function getDockerBase(): string {
-  return getRootBase(30007).replace(/\/$/, "");
+  return getPluginApiUrl("docker", 30007).replace(/\/$/, "");
 }
 
 function dockerApi(): AxiosInstance {
@@ -4333,7 +4342,7 @@ export async function dockerConnect(
   overrides?: SessionAuthOverrides,
 ): Promise<any> {
   try {
-    const response = await dockerApi().post("/docker/ssh/connect", {
+    const response = await dockerApi().post("/ssh/connect", {
       sessionId,
       hostId,
       userProvidedPassword: overrides?.userProvidedPassword,
@@ -4351,7 +4360,7 @@ export async function dockerConnectTOTP(
   totpCode: string,
 ): Promise<any> {
   try {
-    const response = await dockerApi().post("/docker/ssh/connect-totp", {
+    const response = await dockerApi().post("/ssh/connect-totp", {
       sessionId,
       totpCode,
     });
@@ -4363,7 +4372,7 @@ export async function dockerConnectTOTP(
 
 export async function dockerKeepAlive(sessionId: string): Promise<void> {
   try {
-    await dockerApi().post("/docker/ssh/keepalive", { sessionId });
+    await dockerApi().post("/ssh/keepalive", { sessionId });
   } catch {
     // Best-effort heartbeat.
   }
@@ -4371,7 +4380,7 @@ export async function dockerKeepAlive(sessionId: string): Promise<void> {
 
 export async function dockerDisconnect(sessionId: string): Promise<void> {
   try {
-    await dockerApi().post("/docker/ssh/disconnect", { sessionId });
+    await dockerApi().post("/ssh/disconnect", { sessionId });
   } catch {
     // Best-effort on teardown.
   }
@@ -4381,7 +4390,7 @@ export async function dockerStatus(
   sessionId: string,
 ): Promise<{ connected: boolean }> {
   try {
-    const response = await dockerApi().get("/docker/ssh/status", {
+    const response = await dockerApi().get("/ssh/status", {
       params: { sessionId },
     });
     return response.data || { connected: false };
@@ -4395,7 +4404,7 @@ export async function dockerValidate(
   sessionId: string,
 ): Promise<{ available: boolean; version?: string; error?: string }> {
   try {
-    const response = await dockerApi().get(`/docker/validate/${sessionId}`);
+    const response = await dockerApi().get(`/validate/${sessionId}`);
     return response.data;
   } catch (error) {
     handleApiError(error, "validate Docker");
@@ -4407,7 +4416,7 @@ export async function getDockerContainers(
   all = true,
 ): Promise<DockerContainer[]> {
   try {
-    const response = await dockerApi().get(`/docker/containers/${sessionId}`, {
+    const response = await dockerApi().get(`/containers/${sessionId}`, {
       params: { all },
     });
     const data = response.data;
@@ -4423,7 +4432,7 @@ export async function getDockerContainerDetail(
 ): Promise<any> {
   try {
     const response = await dockerApi().get(
-      `/docker/containers/${sessionId}/${containerId}`,
+      `/containers/${sessionId}/${containerId}`,
     );
     return response.data;
   } catch (error) {
@@ -4437,7 +4446,7 @@ export async function getDockerContainerStats(
 ): Promise<DockerContainerStats> {
   try {
     const response = await dockerApi().get(
-      `/docker/containers/${sessionId}/${containerId}/stats`,
+      `/containers/${sessionId}/${containerId}/stats`,
     );
     return response.data;
   } catch (error) {
@@ -4453,11 +4462,11 @@ export async function dockerContainerAction(
   try {
     if (action === "remove") {
       await dockerApi().delete(
-        `/docker/containers/${sessionId}/${containerId}`,
+        `/containers/${sessionId}/${containerId}`,
       );
     } else {
       await dockerApi().post(
-        `/docker/containers/${sessionId}/${containerId}/${action}`,
+        `/containers/${sessionId}/${containerId}/${action}`,
       );
     }
   } catch (error) {
@@ -4472,7 +4481,7 @@ export async function getDockerContainerLogs(
 ): Promise<string> {
   try {
     const response = await dockerApi().get(
-      `/docker/containers/${sessionId}/${containerId}/logs`,
+      `/containers/${sessionId}/${containerId}/logs`,
       { params: { tail } },
     );
     const data = response.data;

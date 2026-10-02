@@ -79,8 +79,10 @@ export function Docker({ host, isVisible }: DockerProps) {
   const connectTransport = useMemo(
     () => ({
       prefix: "docker",
+      // The server looks the host up by id: in standalone mode use the
+      // host's id on the server (h.id is the device's).
       connect: (sessionId: string, h: SSHHost) =>
-        dockerConnect(sessionId, h.id),
+        dockerConnect(sessionId, h.serverId ?? h.id),
       submitTotp: (sessionId: string, code: string) =>
         dockerConnectTOTP(sessionId, code),
       keepAlive: (sessionId: string) => dockerKeepAlive(sessionId),
