@@ -9,6 +9,37 @@
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
+
+// Engine log: an uncaught exception used to exit Node — and, in-process
+// with it, the whole app — without a trace (iOS keeps no crash report for a
+// plain exit). Record failures where they can be read back (iOS: the app
+// container's tmp/termix-engine.log, via `devicectl device copy from
+// --domain-type appDataContainer`) and keep the engine running. Set up
+// before the third-party requires below, which can throw too.
+const ENGINE_LOG = path.join(process.env.TMPDIR || os.tmpdir(), "termix-engine.log");
+function engineLog(line) {
+  try {
+    fs.appendFileSync(ENGINE_LOG, new Date().toISOString() + " " + line + "\n");
+  } catch (_) {
+    /* best effort */
+  }
+}
+engineLog(
+  "start node=" + process.version + " platform=" + process.platform + " arch=" + process.arch,
+);
+process.on("uncaughtException", (err) => {
+  engineLog("uncaughtException: " + ((err && err.stack) || err));
+  try {
+    rn_bridge.channel.send("local-terminal-error:" + ((err && err.message) || "unknown"));
+  } catch (_) {
+    /* bridge gone */
+  }
+});
+process.on("unhandledRejection", (reason) => {
+  engineLog("unhandledRejection: " + ((reason && reason.stack) || reason));
+});
+process.on("exit", (code) => engineLog("exit " + code));
+
 const crypto = require("crypto");
 const { Client } = require("ssh2");
 const { WebSocketServer } = require("ws");
@@ -44,6 +75,7 @@ function findStateDir() {
 
 const STATE_DIR = findStateDir();
 const KNOWN_HOSTS_FILE = STATE_DIR ? path.join(STATE_DIR, "known_hosts.json") : null;
+
 
 function loadKnownHosts() {
   try {
@@ -97,6 +129,7 @@ function send(ws, obj) {
 }
 
 function log(s, level, message) {
+  engineLog(level + ": " + message);
   try {
     send(s.ws, { type: "connection_log", data: { level, message } });
   } catch (_) {
@@ -440,6 +473,7 @@ function handleMessage(ws, raw) {
   }
   const s = sessions.get(ws);
 
+  if (msg.type !== "input" && msg.type !== "resize") engineLog("msg " + msg.type);
   switch (msg.type) {
     case "connectToHost": {
       if (s && s.conn) {
