@@ -41,7 +41,40 @@ process.on("unhandledRejection", (reason) => {
 process.on("exit", (code) => engineLog("exit " + code));
 
 const crypto = require("crypto");
+
+// iOS runs V8 jitless (no JIT for third-party apps), which has no
+// WebAssembly. ssh2 builds its chacha20-poly1305 MAC from a WebAssembly
+// module that it instantiates as soon as it is required, so on iOS
+// require("ssh2") threw "WebAssembly is not defined" and took the app down
+// on the first SSH connection. Without WebAssembly, give ssh2 an inert
+// poly1305 module and never offer chacha20-poly1305 (NO_WASM_CIPHERS below):
+// the AES-GCM / AES-CTR ciphers run on Node's OpenSSL.
+const HAS_WASM = typeof WebAssembly !== "undefined";
+if (!HAS_WASM) {
+  const poly1305Path = require.resolve("ssh2/lib/protocol/crypto/poly1305.js");
+  require.cache[poly1305Path] = {
+    id: poly1305Path,
+    filename: poly1305Path,
+    loaded: true,
+    children: [],
+    exports: () =>
+      Promise.resolve({
+        _malloc: () => 0,
+        cwrap: () => () => {
+          throw new Error("chacha20-poly1305 needs WebAssembly");
+        },
+      }),
+  };
+  engineLog("no WebAssembly: chacha20-poly1305 disabled");
+}
 const { Client } = require("ssh2");
+const NO_WASM_CIPHERS = [
+  "aes128-gcm@openssh.com",
+  "aes256-gcm@openssh.com",
+  "aes128-ctr",
+  "aes192-ctr",
+  "aes256-ctr",
+];
 const { WebSocketServer } = require("ws");
 const rn_bridge = require("rn-bridge");
 
@@ -297,6 +330,7 @@ function openSSH(s) {
     host: h.ip,
     port: h.port,
     username: h.username,
+    ...(HAS_WASM ? {} : { algorithms: { cipher: NO_WASM_CIPHERS } }),
     keepaliveInterval: 15000,
     keepaliveCountMax: 4,
     readyTimeout: READY_TIMEOUT_MS,
