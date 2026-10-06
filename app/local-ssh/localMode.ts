@@ -4,6 +4,7 @@
 // AsyncStorage instead of a remote server. The remote server link keeps
 // working for data sync; it is never used to originate connections.
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { TunnelConnection } from "@/types";
 
 const KEY_ENABLED = "termix.localMode.enabled";
 const KEY_HOSTS = "termix.localHosts.v1";
@@ -26,6 +27,8 @@ export interface LocalHost {
   /** Unset on hosts saved before the flag was stored: follow the server. */
   enableFileManager?: boolean;
   enableDocker?: boolean;
+  enableTunnel?: boolean;
+  tunnelConnections?: TunnelConnection[];
   /** Id of the matching host on the linked sync server (when pushed/merged). */
   serverId?: number;
   createdAt?: string;

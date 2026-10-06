@@ -21,6 +21,7 @@ import type {
   DockerContainerStats,
   DockerContainerAction as DockerActionType,
   SessionAuthOverrides,
+  TunnelConnection,
 } from "../types/index";
 import {
   isLocalModeEnabled,
@@ -869,13 +870,13 @@ function localHostToSSHHost(h: LocalHost): SSHHost {
     keyType: h.keyType ?? undefined,
     forceKeyboardInteractive: false,
     enableTerminal: true,
-    enableTunnel: false,
+    enableTunnel: h.enableTunnel ?? false,
     // Was hard-coded false, so enabling the file manager on the phone never
     // stuck (the flag was not even stored) and the server's value was lost.
     enableFileManager: h.enableFileManager ?? true,
     enableDocker: h.enableDocker ?? false,
     defaultPath: h.defaultPath || "/",
-    tunnelConnections: [],
+    tunnelConnections: h.tunnelConnections ?? [],
     jumpHosts: [],
     quickActions: [],
     enableSsh: true,
@@ -912,6 +913,8 @@ function sshHostDataToLocalHost(
     defaultPath: d.defaultPath || "/",
     enableFileManager: Boolean(d.enableFileManager),
     enableDocker: Boolean(d.enableDocker),
+    enableTunnel: Boolean(d.enableTunnel),
+    tunnelConnections: d.enableTunnel ? d.tunnelConnections || [] : [],
   };
 }
 
@@ -954,6 +957,63 @@ async function fetchServerHostsQuiet(): Promise<SSHHost[] | null> {
     if (result.status === "fulfilled") return result.value;
   }
   return null;
+}
+
+/** A server host's tunnel settings. The 2.9 server keeps them as the
+ *  "tunnels" plugin's per-host settings (pluginSettings.tunnels), not as
+ *  host columns; older servers returned them on the host itself. Undefined
+ *  fields mean "not known". */
+function serverTunnelSettings(sh: SSHHost): {
+  enableTunnel?: boolean;
+  tunnelConnections?: TunnelConnection[];
+} {
+  const plugin = (
+    sh as SSHHost & {
+      pluginSettings?: {
+        tunnels?: { enableTunnel?: unknown; tunnelConnections?: unknown };
+      };
+    }
+  ).pluginSettings?.tunnels;
+  const enable = plugin?.enableTunnel ?? sh.enableTunnel;
+  const list = plugin?.tunnelConnections ?? sh.tunnelConnections;
+  return {
+    enableTunnel: typeof enable === "boolean" ? enable : undefined,
+    tunnelConnections: Array.isArray(list)
+      ? (list as TunnelConnection[])
+      : undefined,
+  };
+}
+
+/** Best-effort write of a synced host's tunnel settings to the server, where
+ *  tunnels run (POST /connect resolves the tunnel from the server's copy by
+ *  host id + index). Only the tunnels plugin's host settings are written —
+ *  the host itself is left alone. Never throws. */
+async function pushTunnelSettingsToServer(host: LocalHost): Promise<void> {
+  if (host.serverId == null || !getCurrentServerUrl()) return;
+  const token = await getCookie("jwt");
+  if (!token || token.trim() === "") return;
+  const body = {
+    enableTunnel: Boolean(host.enableTunnel),
+    // Credentials are resolved server side; never ship them in the setting.
+    tunnelConnections: (host.tunnelConnections ?? []).map(
+      ({
+        endpointPassword: _p,
+        endpointKey: _k,
+        endpointKeyPassword: _kp,
+        ...rest
+      }) => rest,
+    ),
+  };
+  const attempts = getHostBaseCandidates(8081).map((baseURL) =>
+    axios
+      .create({
+        baseURL,
+        timeout: 6000,
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .put(`/plugins/tunnels/settings/host/${host.serverId}`, body),
+  );
+  await Promise.allSettled(attempts);
 }
 
 /** Merge the linked server's hosts into the local device list (persisted).
@@ -1001,7 +1061,13 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
       const nextDocker =
         existing.enableDocker ??
         (typeof sh.enableDocker === "boolean" ? sh.enableDocker : undefined);
+      const serverTunnels = serverTunnelSettings(sh);
+      const nextTunnel = existing.enableTunnel ?? serverTunnels.enableTunnel;
+      const nextTunnelConnections =
+        existing.tunnelConnections ?? serverTunnels.tunnelConnections;
       if (
+        nextTunnel !== existing.enableTunnel ||
+        nextTunnelConnections !== existing.tunnelConnections ||
         existing.name !== mergedName ||
         nextFileManager !== existing.enableFileManager ||
         nextDocker !== existing.enableDocker ||
@@ -1021,6 +1087,8 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
           keyType: nextKeyType,
           enableFileManager: nextFileManager,
           enableDocker: nextDocker,
+          enableTunnel: nextTunnel,
+          tunnelConnections: nextTunnelConnections,
           updatedAt: now,
         });
         changed = true;
@@ -1050,6 +1118,7 @@ async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
         pin: Boolean(sh.pin),
         enableFileManager: sh.enableFileManager !== false,
         enableDocker: sh.enableDocker === true,
+        ...serverTunnelSettings(sh),
         defaultPath: sh.defaultPath || "/",
         serverId,
         createdAt: now,
@@ -1097,7 +1166,7 @@ async function pushLocalHostToServer(host: LocalHost): Promise<void> {
     keyType: host.authType === "key" ? host.keyType || null : null,
     enableSsh: true,
     enableTerminal: true,
-    enableTunnel: false,
+    enableTunnel: Boolean(host.enableTunnel),
     enableFileManager: host.enableFileManager !== false,
     enableDocker: host.enableDocker === true,
     defaultPath: host.defaultPath || "/",
@@ -1126,6 +1195,7 @@ async function pushLocalHostToServer(host: LocalHost): Promise<void> {
   if (idx >= 0) {
     hosts[idx] = { ...hosts[idx], serverId };
     await saveLocalHosts(hosts);
+    if (hosts[idx].enableTunnel) void pushTunnelSettingsToServer(hosts[idx]);
   }
 }
 
@@ -1331,6 +1401,8 @@ export async function updateSSHHost(
     const updated = await upsertLocalHost(
       sshHostDataToLocalHost(hostData, hostId),
     );
+    // Tunnels run on the server from its copy of the settings.
+    void pushTunnelSettingsToServer(updated);
     return localHostToSSHHost(updated);
   }
 
