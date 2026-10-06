@@ -112,7 +112,7 @@ export const TunnelManager = forwardRef<
             targetHost: tunnel.targetHost,
             // The server resolves the tunnel from its own copy of the host:
             // in standalone mode hostConfig.id is the device's id.
-            sourceHostId: hostConfig.serverId ?? hostConfig.id,
+            sourceHostId: sourceHost.serverId ?? sourceHost.id,
             tunnelIndex: idx,
             hostName:
               sourceHost.name || `${sourceHost.username}@${sourceHost.ip}`,
