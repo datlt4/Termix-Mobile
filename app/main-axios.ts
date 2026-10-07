@@ -3714,6 +3714,10 @@ export async function getCredentialFolders(): Promise<any> {
 
 // Get SSH host with resolved credentials
 export async function getSSHHostWithCredentials(hostId: number): Promise<any> {
+  // FORK: standalone ids are the device's, not the server's — asking the
+  // server by them returned another host (or a 404). The device copy holds
+  // the secrets.
+  if (await isLocalModeEnabled()) return getSSHHostById(hostId);
   try {
     const response = await sshHostApi.get(
       `/db/host/${hostId}/with-credentials`,
