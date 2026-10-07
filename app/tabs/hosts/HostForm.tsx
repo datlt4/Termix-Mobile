@@ -726,11 +726,33 @@ export default function HostForm({
                   </View>
 
                   <Field label="Endpoint Host">
-                    <SegmentedControl<string>
-                      value={tunnel.endpointHost ?? ""}
-                      onChange={(v) => setTunnel(idx, { endpointHost: v })}
-                      options={endpointOptions}
-                    />
+                    {/* A list, not a segmented control: a fleet has dozens of
+                        hosts, which squeezed the segments into slivers. */}
+                    <ScrollView
+                      nestedScrollEnabled
+                      style={{ maxHeight: 240 }}
+                      contentContainerStyle={{ gap: 6 }}
+                    >
+                      {endpointOptions.map((o) => {
+                        const selected = tunnel.endpointHost === o.id;
+                        return (
+                          <Pressable
+                            key={o.id}
+                            onPress={() =>
+                              setTunnel(idx, { endpointHost: o.id })
+                            }
+                            className={`border px-3 py-2.5 ${selected ? "border-accent-brand/40 bg-accent-brand/10" : "border-border bg-card"}`}
+                          >
+                            <Text
+                              weight="medium"
+                              className={`text-sm ${selected ? "text-accent-brand" : "text-foreground"}`}
+                            >
+                              {o.label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
                   </Field>
 
                   <View className="flex-row gap-2.5">
