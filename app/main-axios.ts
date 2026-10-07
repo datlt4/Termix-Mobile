@@ -984,17 +984,24 @@ function serverTunnelSettings(sh: SSHHost): {
   };
 }
 
-/** Best-effort write of a synced host's tunnel settings to the server, where
- *  tunnels run (POST /connect resolves the tunnel from the server's copy by
- *  host id + index). Only the tunnels plugin's host settings are written —
- *  the host itself is left alone. Never throws. */
-async function pushTunnelSettingsToServer(host: LocalHost): Promise<void> {
-  if (host.serverId == null || !getCurrentServerUrl()) return;
-  const token = await getCookie("jwt");
-  if (!token || token.trim() === "") return;
-  const body = {
+/** A server host with its tunnel settings on the fields the app reads. */
+function withServerTunnels(sh: SSHHost): SSHHost {
+  const tunnels = serverTunnelSettings(sh);
+  return {
+    ...sh,
+    enableTunnel: tunnels.enableTunnel ?? false,
+    tunnelConnections: tunnels.tunnelConnections ?? [],
+  };
+}
+
+/** The tunnels plugin's host settings for a host. Credentials are resolved
+ *  server side; never ship them in the setting. */
+function tunnelSettingsBody(host: {
+  enableTunnel?: boolean;
+  tunnelConnections?: TunnelConnection[];
+}) {
+  return {
     enableTunnel: Boolean(host.enableTunnel),
-    // Credentials are resolved server side; never ship them in the setting.
     tunnelConnections: (host.tunnelConnections ?? []).map(
       ({
         endpointPassword: _p,
@@ -1004,6 +1011,17 @@ async function pushTunnelSettingsToServer(host: LocalHost): Promise<void> {
       }) => rest,
     ),
   };
+}
+
+/** Best-effort write of a synced host's tunnel settings to the server, where
+ *  tunnels run (POST /connect resolves the tunnel from the server's copy by
+ *  host id + index). Only the tunnels plugin's host settings are written —
+ *  the host itself is left alone. Never throws. */
+async function pushTunnelSettingsToServer(host: LocalHost): Promise<void> {
+  if (host.serverId == null || !getCurrentServerUrl()) return;
+  const token = await getCookie("jwt");
+  if (!token || token.trim() === "") return;
+  const body = tunnelSettingsBody(host);
   const attempts = getHostBaseCandidates(8081).map((baseURL) =>
     axios
       .create({
@@ -1246,7 +1264,7 @@ export async function getSSHHosts(): Promise<SSHHost[]> {
       const hosts = normalizeSSHHostResponse(response.data);
       if (hosts) {
         sshHostApi = candidateApi;
-        return hosts;
+        return hosts.map(withServerTunnels);
       }
       lastError = new Error(`Unexpected host response from ${baseURL}`);
     } catch (error) {
@@ -1458,14 +1476,28 @@ export async function updateSSHHost(
       const response = await sshHostApi.put(`/db/host/${hostId}`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+      await saveServerTunnelSettings(hostId, hostData);
       return response.data;
     } else {
       const response = await sshHostApi.put(`/db/host/${hostId}`, submitData);
+      await saveServerTunnelSettings(hostId, hostData);
       return response.data;
     }
   } catch (error) {
     handleApiError(error, "update SSH host");
   }
+}
+
+// A 2.9 server keeps tunnels as the tunnels plugin's host settings and
+// ignores the legacy enableTunnel/tunnelConnections host fields.
+async function saveServerTunnelSettings(
+  hostId: number,
+  hostData: SSHHostData,
+): Promise<void> {
+  await sshHostApi.put(
+    `/plugins/tunnels/settings/host/${hostId}`,
+    tunnelSettingsBody(hostData),
+  );
 }
 
 export async function bulkImportSSHHosts(hosts: SSHHostData[]): Promise<{
@@ -1507,7 +1539,7 @@ export async function getSSHHostById(hostId: number): Promise<SSHHost> {
 
   try {
     const response = await sshHostApi.get(`/db/host/${hostId}`);
-    return response.data;
+    return withServerTunnels(response.data);
   } catch (error) {
     handleApiError(error, "fetch SSH host");
   }
