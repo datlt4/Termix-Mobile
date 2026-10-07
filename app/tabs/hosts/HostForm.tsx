@@ -117,7 +117,8 @@ export default function HostForm({
   visible: boolean;
   host: SSHHost | null;
   onClose: () => void;
-  onSaved: () => void;
+  /** With the saved host after an edit. */
+  onSaved: (saved?: SSHHost) => void;
 }) {
   const insets = useSafeAreaInsets();
   const color = useThemeColor();
@@ -326,13 +327,14 @@ export default function HostForm({
     setSaving(true);
     try {
       if (isEdit && host) {
-        await updateSSHHost(host.id, payload);
+        const saved = await updateSSHHost(host.id, payload);
         toast.success("Host updated");
+        onSaved(saved);
       } else {
         await createSSHHost(payload);
         toast.success("Host created");
+        onSaved();
       }
-      onSaved();
     } catch (e: any) {
       toast.error(e?.message || "Failed to save host");
     } finally {

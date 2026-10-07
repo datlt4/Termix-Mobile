@@ -802,8 +802,16 @@ export default function Hosts() {
         visible={formOpen}
         host={formHost}
         onClose={() => setFormOpen(false)}
-        onSaved={() => {
+        onSaved={(saved) => {
           setFormOpen(false);
+          // Show the edit right away: the refresh can take seconds (or be
+          // skipped while one is running), and reopening the host in the
+          // meantime edited — and saved back — the old copy.
+          if (saved) {
+            setHosts((prev) =>
+              prev.map((h) => (h.id === saved.id ? { ...h, ...saved } : h)),
+            );
+          }
           fetchData(true);
         }}
       />

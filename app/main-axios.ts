@@ -1038,8 +1038,11 @@ async function pushTunnelSettingsToServer(host: LocalHost): Promise<void> {
  *  Server wins for name/identity; the device keeps its ids, serverId and any
  *  locally stored credentials. Device-only hosts are preserved. */
 async function syncLocalHostsFromServer(): Promise<LocalHost[]> {
-  const local = await getLocalHosts();
+  // Server first, device list after: the fetch can take seconds (unreachable
+  // server), and a host saved meanwhile was overwritten by the merge of the
+  // list read before it.
   const serverHosts = await fetchServerHostsQuiet();
+  const local = await getLocalHosts();
   if (!serverHosts || serverHosts.length === 0) return local;
 
   const now = new Date().toISOString();
