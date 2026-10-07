@@ -264,11 +264,14 @@ export interface TunnelConfig {
   sourceKeyType?: string;
   sourceCredentialId?: number;
   sourceUserId?: string;
-  endpointIP: string;
-  endpointSSHPort: number;
-  endpointUsername: string;
+  /** A saved host's name, or an address the source host reaches. */
+  endpointHost?: string;
+  // Only when the endpoint is a saved host.
+  endpointIP?: string;
+  endpointSSHPort?: number;
+  endpointUsername?: string;
   endpointPassword?: string;
-  endpointAuthMethod: string;
+  endpointAuthMethod?: string;
   endpointSSHKey?: string;
   endpointKeyPassword?: string;
   endpointKeyType?: string;

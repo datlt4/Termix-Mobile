@@ -100,8 +100,8 @@ export const TunnelManager = forwardRef<
               `${h.username}@${h.ip}` === tunnel.endpointHost,
           );
           if (!sourceHost) throw new Error("Source host not found");
-          if (!endpointHost)
-            throw new Error(`Endpoint host not found: ${tunnel.endpointHost}`);
+          // Not a saved host (127.0.0.1, an address): the server forwards to
+          // it through the source host.
 
           await connectTunnel({
             name: key,
@@ -110,6 +110,7 @@ export const TunnelManager = forwardRef<
             tunnelType: tunnel.tunnelType,
             bindHost: tunnel.bindHost,
             targetHost: tunnel.targetHost,
+            endpointHost: tunnel.endpointHost ?? "",
             // The server resolves the tunnel from its own copy of the host:
             // in standalone mode hostConfig.id is the device's id.
             sourceHostId: sourceHost.serverId ?? sourceHost.id,
@@ -134,30 +135,30 @@ export const TunnelManager = forwardRef<
               sourceHost.authType === "key" ? sourceHost.keyType : undefined,
             sourceCredentialId: sourceHost.credentialId,
             sourceUserId: sourceHost.userId,
-            endpointIP: endpointHost.ip,
-            endpointSSHPort: endpointHost.port,
-            endpointUsername: endpointHost.username,
+            endpointIP: endpointHost?.ip,
+            endpointSSHPort: endpointHost?.port,
+            endpointUsername: endpointHost?.username,
             endpointPassword:
-              endpointHost.authType === "password"
-                ? endpointHost.password
+              endpointHost?.authType === "password"
+                ? endpointHost?.password
                 : undefined,
-            endpointAuthMethod: endpointHost.authType,
+            endpointAuthMethod: endpointHost?.authType,
             endpointSSHKey:
-              endpointHost.authType === "key" ? endpointHost.key : undefined,
+              endpointHost?.authType === "key" ? endpointHost?.key : undefined,
             endpointKeyPassword:
-              endpointHost.authType === "key"
-                ? endpointHost.keyPassword
+              endpointHost?.authType === "key"
+                ? endpointHost?.keyPassword
                 : undefined,
             endpointKeyType:
-              endpointHost.authType === "key"
-                ? endpointHost.keyType
+              endpointHost?.authType === "key"
+                ? endpointHost?.keyType
                 : undefined,
-            endpointCredentialId: endpointHost.credentialId,
-            endpointUserId: endpointHost.userId,
+            endpointCredentialId: endpointHost?.credentialId,
+            endpointUserId: endpointHost?.userId,
             sourcePort: tunnel.sourcePort,
             endpointPort: tunnel.endpointPort,
             maxRetries: tunnel.maxRetries,
-            retryInterval: tunnel.retryInterval * 1000,
+            retryInterval: tunnel.retryInterval, // seconds; the server converts
             autoStart: tunnel.autoStart,
             isPinned: sourceHost.pin,
           });

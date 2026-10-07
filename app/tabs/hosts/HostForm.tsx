@@ -14,7 +14,6 @@ import {
   updateSSHHost,
   getSSHHostWithCredentials,
   getCredentials,
-  getSSHHosts,
 } from "@/app/main-axios";
 import {
   Text,
@@ -124,7 +123,6 @@ export default function HostForm({
   const color = useThemeColor();
   const [form, setForm] = useState<FormState>(EMPTY);
   const [credentials, setCredentials] = useState<Credential[]>([]);
-  const [allHosts, setAllHosts] = useState<SSHHost[]>([]);
   const [tunnels, setTunnels] = useState<TunnelConnection[]>([]);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("general");
@@ -141,9 +139,6 @@ export default function HostForm({
         const list = Array.isArray(res) ? res : (res?.credentials ?? []);
         setCredentials(list);
       })
-      .catch(() => {});
-    getSSHHosts()
-      .then(setAllHosts)
       .catch(() => {});
   }, [visible]);
 
@@ -228,16 +223,6 @@ export default function HostForm({
     if (!tabs.some((t) => t.id === activeTab)) setActiveTab("general");
   }, [tabs, activeTab]);
 
-  // Tunnels are resolved by endpoint host name at connect time, so the picker
-  // only offers other saved hosts.
-  const endpointOptions = useMemo(
-    () =>
-      allHosts
-        .filter((h) => h.id !== host?.id)
-        .map((h) => ({ id: h.name || `${h.username}@${h.ip}`, label: h.name || h.ip })),
-    [allHosts, host?.id],
-  );
-
   const setTunnel = (idx: number, patch: Partial<TunnelConnection>) =>
     setTunnels((prev) =>
       prev.map((t, i) => (i === idx ? { ...t, ...patch } : t)),
@@ -252,7 +237,7 @@ export default function HostForm({
       {
         mode: "local",
         sourcePort: 8080,
-        endpointHost: endpointOptions[0]?.id ?? "",
+        endpointHost: "127.0.0.1",
         endpointPort: 80,
         bindHost: "127.0.0.1",
         maxRetries: 3,
@@ -726,33 +711,18 @@ export default function HostForm({
                   </View>
 
                   <Field label="Endpoint Host">
-                    {/* A list, not a segmented control: a fleet has dozens of
-                        hosts, which squeezed the segments into slivers. */}
-                    <ScrollView
-                      nestedScrollEnabled
-                      style={{ maxHeight: 240 }}
-                      contentContainerStyle={{ gap: 6 }}
-                    >
-                      {endpointOptions.map((o) => {
-                        const selected = tunnel.endpointHost === o.id;
-                        return (
-                          <Pressable
-                            key={o.id}
-                            onPress={() =>
-                              setTunnel(idx, { endpointHost: o.id })
-                            }
-                            className={`border px-3 py-2.5 ${selected ? "border-accent-brand/40 bg-accent-brand/10" : "border-border bg-card"}`}
-                          >
-                            <Text
-                              weight="medium"
-                              className={`text-sm ${selected ? "text-accent-brand" : "text-foreground"}`}
-                            >
-                              {o.label}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </ScrollView>
+                    {/* 127.0.0.1 forwards to a port on this host itself; a
+                        saved host's name or any address reachable from it
+                        also works. */}
+                    <Input
+                      value={tunnel.endpointHost ?? ""}
+                      onChangeText={(v) =>
+                        setTunnel(idx, { endpointHost: v.trim() })
+                      }
+                      placeholder="127.0.0.1"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
                   </Field>
 
                   <View className="flex-row gap-2.5">
